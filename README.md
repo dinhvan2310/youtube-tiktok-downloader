@@ -1,70 +1,80 @@
 # Tool Download Video
 
-Web/Electron application with a FastAPI backend for crawling and downloading YouTube/TikTok videos per source folder. Config is JSON; crawl queue and download history live in SQLite.
+![Tool Download Video interface](docs/app-overview.png)
 
-## Requirements
+Tool Download Video is a simple Windows desktop application for discovering, reviewing, and downloading videos from YouTube and TikTok.
 
-- Python 3.11+
-- [FFmpeg](https://ffmpeg.org/download.html) on `PATH` (or beside the exe under `ffmpeg/bin/`)
+It helps you manage multiple video sources in one place, organize downloads automatically, and avoid downloading the same video more than once.
+
+## What You Can Do
+
+- Manage YouTube and TikTok video sources.
+- Automatically discover new videos from configured sources.
+- Review video titles, thumbnails, durations, and metadata before downloading.
+- Select and approve only the videos you want to download.
+- Download multiple videos in parallel.
+- Organize downloads into separate folders for each source.
+- Track download history and prevent duplicate downloads.
+- Import and export source lists using Excel files.
+- Monitor crawling and download progress in real time.
+- Use cookies or browser access for restricted content when necessary.
+
+## How It Works
+
+1. Add your video sources.
+2. Start a crawl to find new videos.
+3. Review the discovered videos.
+4. Approve the videos you want.
+5. Start the download queue.
+
+The app starts with an empty source list, so you can configure your own workspace from the beginning.
+
+## Supported Links
+
+- YouTube channels and video pages
+- YouTube Shorts
+- TikTok profiles
+
+## Installation
+
+1. Install FFmpeg and ffprobe on your Windows computer.
+2. Download and run `Tool-Download-Video-Setup-1.0.0.exe`.
+3. Follow the installer steps.
+4. Open Tool Download Video from the Desktop or Start Menu.
+
+Python is not required. The application includes its own backend.
+
+FFmpeg and ffprobe are required to process and merge separate video and audio streams. Make sure both commands are available on your system `PATH`.
+
+The installer is currently unsigned, so Windows SmartScreen may display a warning. Only run the installer if it came from a trusted source.
+
+## Build from Source
+
+Requirements:
+
 - Windows
+- Python 3.11 or newer
+- Node.js 18 or newer
+- FFmpeg and ffprobe available on `PATH`
 
-## Install
+From the project root, create the Python environment and install the backend dependencies:
 
 ```powershell
-cd D:\workspace\code\tool_download_video
-python -m venv .venv
-.\.venv\Scripts\activate
-pip install -r requirements.txt
+py -3.11 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install -r requirements.txt
 ```
 
-## Run FastAPI directly
+Install Electron dependencies and create the installer:
 
 ```powershell
-python main.py
-```
-
-## Electron application
-
-The desktop UI can also be run as an Electron client with the FastAPI backend:
-
-```powershell
-pip install -r requirements.txt
 cd electron
 npm install
-npm start
+npm run dist:installer
 ```
 
-Electron starts `uvicorn backend.main:app` on localhost and uses the SQLite queue and
-download modules. For a packaged build, install the
-Python dependencies on the target machine and run `npm run dist`; set `TDV_PYTHON`
-if the Python launcher is not available as `py`/`python3`.
+The installer is created at:
 
-## Web UI
+`electron/dist/Tool-Download-Video-Setup-1.0.0.exe`
 
-1. **Manager Source** — add/edit sources, import/export Excel and open folders.
-2. **Auto-sync** — the app incrementally crawls all configured channels in the background; batches arrive in Review without a separate crawl screen.
-3. **Review / Queue** — filter and preview results, approve intentionally, then download only queued items.
-
-## Valid links
-
-- YouTube long-form: `https://www.youtube.com/@channel/videos`
-- YouTube shorts: `https://www.youtube.com/@channel/shorts`
-- YouTube channel (both): `https://www.youtube.com/@channel`
-- TikTok profile: `https://www.tiktok.com/@user`
-
-## Behavior
-
-- Each source downloads into its own `path_download`
-- Crawl stores new video IDs in SQLite; download takes pending newest-first until the folder has `target_videos_per_page` files
-- `downloaded_videos` prevents re-downloading the same `video_id` per source
-- File name = sanitized video title
-- `thread_count` = parallel downloads per source; `source_thread_count` = parallel sources
-- The Electron workflow is staged: crawl → review/preview → approve → download
-- Crawl results arrive incrementally through SSE while the full channel continues in the background
-- Only videos explicitly approved into the queue are eligible for download
-- Auto-sync skips known IDs and stops after a streak of known videos; a 15-minute freshness window avoids redundant launches
-
-## Config
-
-See [`config/settings.example.json`](config/settings.example.json). Legacy `pages` + `output_base_folder` configs are migrated on load.
-
+The build includes the Electron interface and the bundled Python backend. The installer can be shared with end users after a successful build.
