@@ -1,0 +1,6 @@
+# Temporary upstream fix for TikTok empty item_list responses (yt-dlp PR #17548).
+yt-dlp[curl-cffi] @ https://github.com/yt-dlp/yt-dlp/archive/230edadd25b8a2b167f6395a9d3f3ab890295536.zip
+yt-dlp-ejs>=0.8.0
+openpyxl>=3.1.0
+fastapi>=0.115.0
+uvicorn[standard]>=0.30.0

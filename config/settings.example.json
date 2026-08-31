@@ -1,0 +1,12 @@
+{
+  "quality_height": 1080,
+  "target_videos_per_page": 20,
+  "max_duration_seconds": 600,
+  "thread_count": 3,
+  "source_thread_count": 1,
+  "source_root_path": "",
+  "youtube_cookies_file": "",
+  "tiktok_cookies_file": "",
+  "douyin_cookie": "",
+  "sources": []
+}

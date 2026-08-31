@@ -1,0 +1,16 @@
+.venv/
+venv/
+node_modules/
+__pycache__/
+*.py[cod]
+*.db
+*.tmp
+config/settings.json
+config/*cookies*.txt
+data/
+logs/
+*.egg-info/
+dist/
+build/
+renderer-dist/
+backend-dist/
