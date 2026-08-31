@@ -38,7 +38,7 @@ The app starts with an empty source list, so you can configure your own workspac
 ## Installation
 
 1. Install FFmpeg and ffprobe on your Windows computer.
-2. Download and run `Tool-Download-Video-Setup-1.0.0.exe`.
+2. Download and run [Tool-Download-Video-Setup-1.0.0.exe](https://github.com/dinhvan2310/youtube-tiktok-downloader/releases/download/v1.0.0/Tool-Download-Video-Setup-1.0.0.exe).
 3. Follow the installer steps.
 4. Open Tool Download Video from the Desktop or Start Menu.
 
