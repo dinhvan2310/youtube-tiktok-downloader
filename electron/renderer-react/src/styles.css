@@ -338,3 +338,4 @@ main{height:100%;min-height:0;display:flex;flex-direction:column;overflow:hidden
   .review-page .page-header,.sources-page .page-header,.settings-page .settings-header{margin-bottom:12px}
 }
 .published-date{white-space:nowrap;font-variant-numeric:tabular-nums}
+.bulk-action.danger{background:#fff1f0!important;border-color:#efc0bb!important;color:#b42318!important}
