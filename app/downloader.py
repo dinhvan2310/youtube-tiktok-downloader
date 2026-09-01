@@ -28,6 +28,22 @@ _download_condition = threading.Condition()
 _active_downloads = 0
 
 
+class _QuietExtractorLogger:
+    """Keep expected TikTok challenge errors out of the shared task log."""
+
+    def debug(self, _message: str) -> None:
+        pass
+
+    def write_debug(self, _message: str) -> None:
+        pass
+
+    def warning(self, _message: str, **_kwargs) -> None:
+        pass
+
+    def error(self, _message: str, **_kwargs) -> None:
+        pass
+
+
 @dataclass(frozen=True)
 class DownloadResult:
     """Keep expected skips distinct from media-download failures."""
@@ -137,6 +153,7 @@ class VideoDownloader:
             "progress_hooks": [self._make_progress_hook(source_id, entry, progress_state)],
         }
         if entry.platform == "tiktok":
+            opts["logger"] = _QuietExtractorLogger()
             # Prefer the best short-edge resolution within the configured cap,
             # then H264 over silent bytevc1/h265 when sorting ties.
             opts["format_sort"] = ([f"res:{quality_limit}"] if quality_limit else ["res"]) + ["vcodec:h264", "br"]
@@ -181,23 +198,22 @@ class VideoDownloader:
                     info = ydl.extract_info(entry.url, download=True)
             except Exception as error:
                 fallback_opts = cookie_file_fallback_options(opts, self.global_cfg.youtube_cookies_file)
-                if not fallback_opts or not is_browser_cookie_locked(error):
+                if fallback_opts and is_browser_cookie_locked(error):
+                    self._log("Browser cookies are locked; retrying this video with cookies.txt")
+                    with yt_dlp.YoutubeDL(fallback_opts) as ydl:
+                        info = ydl.extract_info(entry.url, download=True)
+                elif entry.platform == "tiktok" and self._is_tiktok_cookie_error(str(error)):
+                    self._log("TikTok web challenge blocked the default client; retrying with Safari-compatible webpage fallback")
+                    fallback_opts = dict(opts)
+                    fallback_opts["impersonate"] = ImpersonateTarget("safari")
+                    fallback_opts["http_headers"] = {
+                        **(fallback_opts.get("http_headers") or {}),
+                        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.6 Safari/605.1.15",
+                    }
+                    with yt_dlp.YoutubeDL(fallback_opts) as ydl:
+                        info = self._download_tiktok_safari_fallback(ydl, entry, tmp_outtmpl, quality_limit, opts)
+                else:
                     raise
-                self._log("Browser cookies are locked; retrying this video with cookies.txt")
-                with yt_dlp.YoutubeDL(fallback_opts) as ydl:
-                    info = ydl.extract_info(entry.url, download=True)
-            except Exception as error:
-                if entry.platform != "tiktok" or not self._is_tiktok_cookie_error(str(error)):
-                    raise
-                self._log("TikTok web challenge blocked the default client; retrying with Safari-compatible webpage fallback")
-                fallback_opts = dict(opts)
-                fallback_opts["impersonate"] = ImpersonateTarget("safari")
-                fallback_opts["http_headers"] = {
-                    **(fallback_opts.get("http_headers") or {}),
-                    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.6 Safari/605.1.15",
-                }
-                with yt_dlp.YoutubeDL(fallback_opts) as ydl:
-                    info = self._download_tiktok_safari_fallback(ydl, entry, tmp_outtmpl, quality_limit, opts)
             if not info:
                 self._cleanup_entry_files(page_dir, entry.video_id)
                 self._log(f"Download failed: {entry.title}")
