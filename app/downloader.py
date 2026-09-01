@@ -7,6 +7,7 @@ import subprocess
 import time
 import threading
 from contextlib import contextmanager
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
@@ -15,12 +16,19 @@ import yt_dlp
 from app.config_models import GlobalConfig
 from app.db import DownloadDB
 from app.filename import sanitize_title, unique_filepath
-from app.paths import resolve_ffmpeg, resolve_ffprobe
+from app.paths import resolve_ffmpeg, resolve_ffprobe, resolve_node
 from app.playlist import VideoEntry
 from app.ytdlp_cookies import apply_tiktok_cookies, apply_youtube_cookies, cookie_file_fallback_options, is_browser_cookie_locked
 
 _download_condition = threading.Condition()
 _active_downloads = 0
+
+
+@dataclass(frozen=True)
+class DownloadResult:
+    """Keep expected skips distinct from media-download failures."""
+
+    status: str
 
 
 @contextmanager
@@ -88,16 +96,16 @@ class VideoDownloader:
         self._progress_event = progress_event or (lambda _data: None)
         self._stop_check = stop_check or (lambda: False)
 
-    def download_one(self, source_id: str, entry: VideoEntry, page_dir: Path) -> bool:
+    def download_one(self, source_id: str, entry: VideoEntry, page_dir: Path) -> DownloadResult:
         with _download_slot(self.global_cfg.global_download_concurrency):
             return self._download_one(source_id, entry, page_dir)
 
-    def _download_one(self, source_id: str, entry: VideoEntry, page_dir: Path) -> bool:
+    def _download_one(self, source_id: str, entry: VideoEntry, page_dir: Path) -> DownloadResult:
         if self._stop_check():
-            return False
+            return DownloadResult("skipped")
         if self.db.is_downloaded(source_id, entry.video_id):
             self._log(f"Already downloaded, skip: {entry.title}")
-            return False
+            return DownloadResult("skipped")
 
         page_dir.mkdir(parents=True, exist_ok=True)
         tmp_outtmpl = str(page_dir / f"__tmp_{entry.video_id}.%(ext)s")
@@ -120,7 +128,7 @@ class VideoDownloader:
             "fragment_retries": 2,
             # YouTube now requires an external JS runtime (EJS challenge).
             # Deno is yt-dlp's default, but Windows installs commonly have Node only.
-            "js_runtimes": {"node": {"path": shutil.which("node") or "node"}},
+            "js_runtimes": {"node": {"path": resolve_node() or "node"}},
             "remote_components": {"ejs:github"},
             "progress_hooks": [self._make_progress_hook(source_id, entry, progress_state)],
         }
@@ -170,7 +178,7 @@ class VideoDownloader:
             if not info:
                 self._cleanup_entry_files(page_dir, entry.video_id)
                 self._log(f"Download failed: {entry.title}")
-                return False
+                return DownloadResult("failed")
 
             ext = info.get("ext") or "mp4"
             final_name = sanitize_title(info.get("title") or entry.title, fallback=entry.video_id)
@@ -182,7 +190,7 @@ class VideoDownloader:
             if tmp_path is None or not tmp_path.exists():
                 self._cleanup_entry_files(page_dir, entry.video_id)
                 self._log(f"File not found after download: {entry.title}")
-                return False
+                return DownloadResult("failed")
 
             media_width, media_height = self._probe_resolution(tmp_path, ffprobe)
             media_resolution = min(media_width, media_height) if media_width and media_height else None
@@ -217,7 +225,7 @@ class VideoDownloader:
                 downloaded_path.unlink(missing_ok=True)
                 self._cleanup_entry_files(page_dir, entry.video_id)
                 self._log(f"DB duplicate, removed file: {entry.title}")
-                return False
+                return DownloadResult("skipped")
 
             resolution_detail = f" ({media_width}x{media_height})" if media_width and media_height else ""
             self._log(f"Downloaded: {downloaded_path.name}{resolution_detail}")
@@ -226,7 +234,7 @@ class VideoDownloader:
                 "title": entry.title, "width": media_width, "height": media_height,
                 "resolution": media_resolution, "quality_limit": quality_limit,
             })
-            return True
+            return DownloadResult("downloaded")
 
         except Exception as e:
             clean_error = self._clean_error_text(str(e))
@@ -245,11 +253,11 @@ class VideoDownloader:
                 self.db.delete_crawled(source_id, entry.video_id)
                 self._log(f"Dropped from queue (gone): {entry.title}")
             self._log(f"Download error {entry.title}: {e}")
-            return False
+            return DownloadResult("failed")
 
     def _fail_before_download(
         self, source_id: str, entry: VideoEntry, page_dir: Path, message: str
-    ) -> bool:
+    ) -> DownloadResult:
         self._cleanup_entry_files(page_dir, entry.video_id)
         self._progress_log(f"ERROR: {message}")
         self._progress_event({
@@ -257,7 +265,7 @@ class VideoDownloader:
             "title": entry.title, "error": message,
         })
         self._log(f"Download error {entry.title}: {message}")
-        return False
+        return DownloadResult("failed")
 
     def _probe_resolution(self, path: Path, ffprobe: str | None) -> tuple[int | None, int | None]:
         if not ffprobe:
@@ -304,7 +312,7 @@ class VideoDownloader:
             "video unavailable",
             "has been removed",
             "private video",
-            "is not available",
+            "this video is unavailable",
             "account associated with this video has been terminated",
         )
         return any(m in lower for m in markers)

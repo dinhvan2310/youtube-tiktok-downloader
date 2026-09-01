@@ -69,3 +69,25 @@ def resolve_ffmpeg() -> str | None:
 def resolve_ffprobe() -> str | None:
     """Find ffprobe beside ffmpeg or on PATH for media inspection."""
     return _resolve_tool("ffprobe")
+
+
+def resolve_node() -> str | None:
+    """Find a supported Node runtime bundled for yt-dlp's YouTube EJS solver."""
+    candidates: list[Path] = [
+        project_root() / "tools" / "node" / "node.exe",
+        project_root() / "tools" / "node" / "node",
+    ]
+    if getattr(sys, "frozen", False):
+        candidates.extend(
+            [
+                bundle_root() / "tools" / "node" / "node.exe",
+                bundle_root() / "tools" / "node" / "node",
+            ]
+        )
+    system_node = shutil.which("node")
+    if system_node:
+        candidates.append(Path(system_node))
+    for path in candidates:
+        if path.is_file():
+            return str(path.resolve())
+    return None

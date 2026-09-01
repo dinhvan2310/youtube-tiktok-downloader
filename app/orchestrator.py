@@ -9,7 +9,7 @@ from typing import Callable
 
 from app.config_models import AppConfig, SourceConfig, source_label
 from app.db import DownloadDB
-from app.downloader import VideoDownloader
+from app.downloader import DownloadResult, VideoDownloader
 from app.filename import count_videos_in_folder
 from app.playlist import VideoEntry, fetch_all_entries, fetch_entries_batched
 
@@ -273,7 +273,7 @@ class DownloadOrchestrator:
             sid = str(source.id)
 
             with ThreadPoolExecutor(max_workers=max(1, per_source_parallelism)) as pool:
-                futures: dict[Future[bool], VideoEntry] = {}
+                futures: dict[Future[DownloadResult], VideoEntry] = {}
                 for row in pending:
                     if self.is_stopped():
                         break
@@ -334,7 +334,7 @@ class DownloadOrchestrator:
 
     def _drain_futures(
         self,
-        futures: dict[Future[bool], VideoEntry],
+        futures: dict[Future[DownloadResult], VideoEntry],
         label: str,
         out_dir: Path,
         target: int,
@@ -347,8 +347,8 @@ class DownloadOrchestrator:
         for fut in done:
             entry = futures.pop(fut)
             try:
-                ok = fut.result()
-                if ok:
+                outcome = fut.result()
+                if outcome.status == "downloaded":
                     with self._stats_lock:
                         stats.downloaded += 1
                     source_progress["completed"] += 1
@@ -359,9 +359,14 @@ class DownloadOrchestrator:
                     if existing >= target:
                         self._log(f"[{label}] Reached target {target}")
                         return True
-                else:
+                elif outcome.status == "skipped":
                     with self._stats_lock:
                         stats.skipped += 1
+                    source_progress["failed"] += 1
+                    self._progress_event("download_summary", {**source_progress, "source_label": label})
+                else:
+                    with self._stats_lock:
+                        stats.errors += 1
                     source_progress["failed"] += 1
                     self._progress_event("download_summary", {**source_progress, "source_label": label})
             except Exception as e:

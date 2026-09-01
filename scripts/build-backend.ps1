@@ -6,6 +6,7 @@ $configExample = Join-Path $root "config\settings.example.json"
 $backendDist = Join-Path $root "electron\backend-dist"
 $ffmpeg = Join-Path $root "tools\ffmpeg\bin\ffmpeg.exe"
 $ffprobe = Join-Path $root "tools\ffmpeg\bin\ffprobe.exe"
+$node = (Get-Command node -ErrorAction Stop).Source
 
 if (-not (Test-Path -LiteralPath $python)) {
     throw "Missing Python virtual environment: $python"
@@ -19,6 +20,9 @@ if (-not (Test-Path -LiteralPath $ffmpeg) -or -not (Test-Path -LiteralPath $ffpr
     if ($LASTEXITCODE -ne 0) {
         exit $LASTEXITCODE
     }
+}
+if (-not (Test-Path -LiteralPath $node)) {
+    throw "A supported Node.js runtime is required to bundle YouTube's challenge solver."
 }
 if (-not (Test-Path -LiteralPath $ffmpeg) -or -not (Test-Path -LiteralPath $ffprobe)) {
     throw "FFmpeg installation did not produce ffmpeg.exe and ffprobe.exe."
@@ -43,6 +47,7 @@ try {
         --add-data "$configExample;config" `
         --add-binary "$ffmpeg;tools/ffmpeg/bin" `
         --add-binary "$ffprobe;tools/ffmpeg/bin" `
+        --add-binary "$node;tools/node" `
         main.py
     if ($LASTEXITCODE -ne 0) {
         exit $LASTEXITCODE

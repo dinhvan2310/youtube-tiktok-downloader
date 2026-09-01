@@ -37,7 +37,7 @@ The app starts with an empty source list, so you can configure your own workspac
 
 ## Installation
 
-1. Download and run [Tool-Download-Video-Setup-1.0.1.exe](https://github.com/dinhvan2310/youtube-tiktok-downloader/releases/download/v1.0.1/Tool-Download-Video-Setup-1.0.1.exe).
+1. Download and run [Tool-Download-Video-Setup-1.0.2.exe](https://github.com/dinhvan2310/youtube-tiktok-downloader/releases/download/v1.0.2/Tool-Download-Video-Setup-1.0.2.exe).
 2. Follow the installer steps.
 3. Open Tool Download Video from the Desktop or Start Menu.
 
@@ -73,6 +73,6 @@ The build downloads the Windows FFmpeg archive, verifies its SHA-256 checksum, a
 
 The installer is created at:
 
-`electron/dist/Tool-Download-Video-Setup-1.0.1.exe`
+`electron/dist/Tool-Download-Video-Setup-1.0.2.exe`
 
 The build includes the Electron interface and the bundled Python backend. The installer can be shared with end users after a successful build.
