@@ -22,7 +22,7 @@ from app.db import DownloadDB
 from app.filename import count_videos_in_folder
 from app.orchestrator import DownloadOrchestrator
 
-app = FastAPI(title="Tool Download Video API", version="1.0.0")
+app = FastAPI(title="Reup Studio API", version="1.0.0")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 _jobs: dict[str, dict[str, Any]] = {}
 _lock = threading.Lock()

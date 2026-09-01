@@ -1,7 +1,7 @@
 {
   "name": "tool-download-video",
   "version": "1.0.8",
-  "description": "Electron desktop client for Tool Download Video",
+  "description": "Reup Studio desktop workspace for video sourcing, review and downloads",
   "main": "main.js",
   "scripts": {
     "start": "npm run build:renderer && electron .",
@@ -21,7 +21,7 @@
   },
   "build": {
     "appId": "com.tool.downloadvideo",
-    "productName": "Tool Download Video",
+    "productName": "Reup Studio",
     "files": [
       "**/*",
       "!node_modules/.cache/**",
@@ -36,6 +36,7 @@
     ],
     "win": {
       "target": "nsis",
+      "icon": "renderer-react/src/assets/reup-studio.ico",
       "signAndEditExecutable": false
     },
     "nsis": {
@@ -44,8 +45,8 @@
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "shortcutName": "Tool Download Video",
-      "artifactName": "Tool-Download-Video-Setup-${version}.${ext}"
+      "shortcutName": "Reup Studio",
+      "artifactName": "Reup-Studio-Setup-${version}.${ext}"
     }
   },
   "dependencies": {

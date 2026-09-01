@@ -4,6 +4,8 @@ const path = require('path');
 const fs = require('fs');
 const http = require('http');
 
+app.setName('Reup Studio');
+
 let server;
 let serverDiagnostics = '';
 const port = 8765;
@@ -57,6 +59,7 @@ async function startServer() {
 }
 function createWindow() {
   const win = new BrowserWindow({ width: 1400, height: 900, minWidth: 1050, minHeight: 700,
+    title: 'Reup Studio', icon: path.join(__dirname, 'renderer-react', 'src', 'assets', 'reup-studio-logo.png'),
     webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false } });
   win.loadFile(path.join(__dirname, 'renderer-dist', 'index.html'));
 }
