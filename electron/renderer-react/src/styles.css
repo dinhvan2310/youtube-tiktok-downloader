@@ -289,7 +289,7 @@
 @media(max-width:620px){.settings-header{align-items:flex-start}.settings-save{display:grid;justify-items:end}.settings-save>span{display:none}.settings-fields.two-columns,.settings-fields.three-columns{grid-template-columns:1fr}.credential-row{grid-template-columns:1fr}.credential-platform{grid-column:auto}.credential-wide{grid-column:auto}.settings-card-heading,.settings-fields,.credential-row{padding-left:14px;padding-right:14px}}
 
 /* Sources and Settings follow Review's page-local scrolling model. */
-.sources-page,.settings-page{
+.sources-page,.settings-page,.queue-page{
   height:calc(100dvh - 58px);
   min-height:0;
   display:flex;
@@ -299,6 +299,10 @@
 }
 .sources-page{max-width:none}
 .sources-page .page-header,.sources-page .toolbar,.settings-page .settings-header,.settings-page .settings-error{flex:none}
+.queue-page{max-width:none}
+.queue-page .page-header,.queue-page .selection-bar{flex:none}
+.queue-page .table-card{flex:1;min-height:0;overflow:auto;overscroll-behavior:contain;scrollbar-gutter:stable}
+.queue-page .table-card thead{position:sticky;top:0;z-index:2}
 .sources-page .sources-table{
   flex:1;
   min-height:0;
@@ -327,15 +331,15 @@ main{height:100%;min-height:0;display:flex;flex-direction:column;overflow:hidden
 .topbar{flex:none}
 .page-frame{flex:1;min-height:0;overflow:auto}
 .page-frame{height:100%}
-.page-frame-review,.page-frame-sources,.page-frame-settings{overflow:hidden}
-.review-page,.sources-page,.settings-page{height:100%}
+.page-frame-review,.page-frame-sources,.page-frame-settings,.page-frame-queue{overflow:hidden}
+.review-page,.sources-page,.settings-page,.queue-page{height:100%}
 @media(max-width:900px){
   .app-shell{grid-template-rows:auto minmax(0,1fr)}
   main{height:auto}
 }
 @media(max-height:640px){
-  .review-page,.sources-page,.settings-page{padding-top:18px;padding-bottom:12px}
-  .review-page .page-header,.sources-page .page-header,.settings-page .settings-header{margin-bottom:12px}
+  .review-page,.sources-page,.settings-page,.queue-page{padding-top:18px;padding-bottom:12px}
+  .review-page .page-header,.sources-page .page-header,.settings-page .settings-header,.queue-page .page-header{margin-bottom:12px}
 }
 .published-date{white-space:nowrap;font-variant-numeric:tabular-nums}
 .bulk-action.danger{background:#fff1f0!important;border-color:#efc0bb!important;color:#b42318!important}
