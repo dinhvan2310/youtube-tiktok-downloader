@@ -15,6 +15,7 @@ from typing import Callable
 import yt_dlp
 from curl_cffi import requests as curl_requests
 from yt_dlp.extractor.tiktok import TikTokIE
+from yt_dlp.networking.impersonate import ImpersonateTarget
 
 from app.config_models import GlobalConfig
 from app.db import DownloadDB
@@ -189,9 +190,14 @@ class VideoDownloader:
                 if entry.platform != "tiktok" or not self._is_tiktok_cookie_error(str(error)):
                     raise
                 self._log("TikTok web challenge blocked the default client; retrying with Safari-compatible webpage fallback")
-                with yt_dlp.YoutubeDL(opts) as ydl:
-                    fallback_info = self._extract_tiktok_safari_info(ydl, entry)
-                    info = ydl.process_ie_result(fallback_info, download=True)
+                fallback_opts = dict(opts)
+                fallback_opts["impersonate"] = ImpersonateTarget("safari")
+                fallback_opts["http_headers"] = {
+                    **(fallback_opts.get("http_headers") or {}),
+                    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.6 Safari/605.1.15",
+                }
+                with yt_dlp.YoutubeDL(fallback_opts) as ydl:
+                    info = self._download_tiktok_safari_fallback(ydl, entry, tmp_outtmpl, quality_limit, opts)
             if not info:
                 self._cleanup_entry_files(page_dir, entry.video_id)
                 self._log(f"Download failed: {entry.title}")
@@ -316,6 +322,59 @@ class VideoDownloader:
             return None, None
 
     @staticmethod
+    def _download_tiktok_safari_fallback(
+        ydl: yt_dlp.YoutubeDL,
+        entry: VideoEntry,
+        tmp_outtmpl: str,
+        quality_limit: int,
+        opts: dict,
+    ) -> dict:
+        info = VideoDownloader._extract_tiktok_safari_info(ydl, entry)
+        formats = [f for f in info.get("formats") or [] if f.get("vcodec") not in (None, "none") and f.get("url")]
+        if quality_limit:
+            capped = [f for f in formats if min(f.get("width") or 0, f.get("height") or 0) <= quality_limit]
+            formats = capped or formats
+        if not formats:
+            raise RuntimeError("TikTok fallback response contained no downloadable video format")
+        selected = max(
+            formats,
+            key=lambda f: (
+                min(f.get("width") or 0, f.get("height") or 0),
+                1 if str(f.get("vcodec") or "").lower().startswith(("avc", "h264")) else 0,
+                f.get("tbr") or 0,
+            ),
+        )
+        cookie_header = (info.get("http_headers") or {}).get("Cookie", "")
+        headers = {"Referer": entry.url}
+        if cookie_header:
+            headers["Cookie"] = cookie_header
+        target = Path(tmp_outtmpl.replace("%(ext)s", "mp4"))
+        last_error = "TikTok CDN rejected the fallback request"
+        for client in ("safari", "edge"):
+            try:
+                response = curl_requests.get(selected["url"], impersonate=client, headers=headers, timeout=30, stream=True)
+                if response.status_code != 200:
+                    last_error = f"TikTok CDN returned HTTP {response.status_code}"
+                    continue
+                total = int(response.headers.get("content-length") or 0) or None
+                downloaded = 0
+                with target.open("wb") as output:
+                    for chunk in response.iter_content(chunk_size=1024 * 1024):
+                        if not chunk:
+                            continue
+                        output.write(chunk)
+                        downloaded += len(chunk)
+                        for hook in opts.get("progress_hooks") or []:
+                            hook({"status": "downloading", "downloaded_bytes": downloaded, "total_bytes": total, "filename": str(target), "info_dict": info})
+                for hook in opts.get("progress_hooks") or []:
+                    hook({"status": "finished", "downloaded_bytes": downloaded, "total_bytes": total, "filename": str(target), "info_dict": info})
+                return {**info, "ext": "mp4", "format_id": selected.get("format_id")}
+            except Exception as error:
+                last_error = str(error)
+                target.unlink(missing_ok=True)
+        raise RuntimeError(last_error)
+
+    @staticmethod
     def _extract_tiktok_safari_info(ydl: yt_dlp.YoutubeDL, entry: VideoEntry) -> dict:
         """Extract TikTok universal data through a less-blocked browser fingerprint.
 
@@ -340,26 +399,37 @@ class VideoDownloader:
                 cookies = {}
         # TikTok varies its response by TLS/browser fingerprint. Try the two
         # fingerprints that currently return the full HTML document on Windows.
-        for client in ("safari", "edge"):
-            try:
-                response = curl_requests.get(entry.url, impersonate=client, cookies=cookies or None, timeout=30)
-                response.raise_for_status()
-                webpage = response.text
-                marker_pos = webpage.find(marker)
-                if marker_pos < 0:
-                    continue
-                start = webpage.find(">", marker_pos)
-                end = webpage.find("</script>", start)
-                if start < 0 or end < 0:
-                    last_error = "Safari fallback response contained malformed TikTok data"
-                    continue
-                scope = json.loads(webpage[start + 1:end]).get("__DEFAULT_SCOPE__", {})
-                detail = ((scope.get("webapp.video-detail") or {}).get("itemInfo") or {}).get("itemStruct")
-                if isinstance(detail, dict):
-                    return TikTokIE(ydl)._parse_aweme_video_web(detail, entry.url, entry.video_id)
-                last_error = "Safari fallback response did not contain TikTok video data"
-            except Exception as error:
-                last_error = str(error)
+        for _attempt in range(3):
+            for client in ("safari", "edge"):
+                try:
+                    response = curl_requests.get(entry.url, impersonate=client, cookies=cookies or None, timeout=20)
+                    response.raise_for_status()
+                    webpage = response.text
+                    marker_pos = webpage.find(marker)
+                    if marker_pos < 0:
+                        continue
+                    start = webpage.find(">", marker_pos)
+                    end = webpage.find("</script>", start)
+                    if start < 0 or end < 0:
+                        last_error = "Safari fallback response contained malformed TikTok data"
+                        continue
+                    scope = json.loads(webpage[start + 1:end]).get("__DEFAULT_SCOPE__", {})
+                    detail = ((scope.get("webapp.video-detail") or {}).get("itemInfo") or {}).get("itemStruct")
+                    if isinstance(detail, dict):
+                        info = TikTokIE(ydl)._parse_aweme_video_web(detail, entry.url, entry.video_id)
+                        # The page response sets short-lived tt_chain_token/msToken
+                        # cookies that the signed CDN URL checks. Preserve only the
+                        # cookie header for this one download; never persist values.
+                        page_cookies = {key: value for key, value in response.cookies.items()}
+                        if page_cookies:
+                            cookie_header = "; ".join(f"{key}={value}" for key, value in {**cookies, **page_cookies}.items())
+                            info["http_headers"] = {**(info.get("http_headers") or {}), "Cookie": cookie_header}
+                            for fmt in info.get("formats") or []:
+                                fmt["http_headers"] = {**(fmt.get("http_headers") or {}), "Cookie": cookie_header}
+                        return info
+                    last_error = "Safari fallback response did not contain TikTok video data"
+                except Exception as error:
+                    last_error = str(error)
         raise RuntimeError(last_error)
 
     @staticmethod
