@@ -88,8 +88,8 @@ export function ActivityDrawer({ open, onOpenChange }) {
     if (!planned) return null
     const completed = events.filter(event => event.event === 'download_completed').length
     const failed = events.filter(event => event.event === 'download_failed').length
-    const active = [...events].reverse().find(event => ['download_downloading', 'download_finishing', 'download_starting'].includes(event.event))?.data || null
-    const currentFraction = active?.stage === 'downloading' && Number.isFinite(Number(active.percent)) ? Number(active.percent) / 100 : active?.stage === 'finishing' ? 1 : 0
+    const active = [...events].reverse().find(event => ['download_downloading', 'download_converting', 'download_finishing', 'download_starting'].includes(event.event))?.data || null
+    const currentFraction = ['downloading', 'converting'].includes(active?.stage) && Number.isFinite(Number(active.percent)) ? Number(active.percent) / 100 : active?.stage === 'finishing' ? 1 : 0
     return { planned, completed, failed, active, value: Math.min(100, Math.round((completed + failed + currentFraction) * 100 / planned)) }
   }, [events])
   const progress = downloadProgress ? { completed: downloadProgress.completed + downloadProgress.failed, total: downloadProgress.planned } : genericProgress
@@ -103,13 +103,13 @@ export function ActivityDrawer({ open, onOpenChange }) {
       const current = map.get(data.video_id) || { id: data.video_id, title: data.title || data.video_id, percent: 0, stage: 'starting' }
       current.title = data.title || current.title
       current.stage = data.stage || current.stage
-      if (event.event === 'download_downloading' && Number.isFinite(Number(data.percent))) current.percent = Number(data.percent)
+      if (['download_downloading', 'download_converting'].includes(event.event) && Number.isFinite(Number(data.percent))) current.percent = Number(data.percent)
       if (event.event === 'download_finishing') { current.stage = 'finishing'; current.percent = 100 }
       if (event.event === 'download_completed') { current.stage = 'completed'; current.percent = 100 }
       if (event.event === 'download_failed') { current.stage = 'failed'; current.error = data.error }
       map.set(data.video_id, current)
     })
-    const priority = { failed: 0, downloading: 1, finishing: 1, starting: 2, completed: 3 }
+    const priority = { failed: 0, downloading: 1, converting: 1, finishing: 1, starting: 2, completed: 3 }
     return [...map.values()].sort((a, b) => (priority[a.stage] ?? 2) - (priority[b.stage] ?? 2))
   }, [events])
   const resultMetrics = useMemo(() => Object.entries(selected?.result || {}).filter(([, value]) => typeof value === 'number' && Number.isFinite(value)).slice(0, 3), [selected])
@@ -221,7 +221,7 @@ export function ActivityDrawer({ open, onOpenChange }) {
                     <div className={`download-video-row ${video.stage}`} key={video.id}>
                       <div className="download-video-meta">
                         <strong title={video.title}>{video.title}</strong>
-                        <span>{video.stage === 'completed' ? 'Completed' : video.stage === 'failed' ? 'Failed' : video.stage === 'finishing' ? 'Finalizing' : video.percent > 0 ? `${Math.round(video.percent)}%` : 'Preparing'}</span>
+                        <span>{video.stage === 'completed' ? 'Completed' : video.stage === 'failed' ? 'Failed' : video.stage === 'converting' ? (video.percent > 0 ? `Converting ${Math.round(video.percent)}%` : 'Converting') : video.stage === 'finishing' ? 'Finalizing' : video.percent > 0 ? `${Math.round(video.percent)}%` : 'Preparing'}</span>
                       </div>
                       <i><em style={{ width: `${Math.max(0, Math.min(100, video.percent))}%` }} /></i>
                     </div>

@@ -20,6 +20,10 @@ TIKTOK_PROFILE_RE = re.compile(
     r"^https?://(?:www\.)?tiktok\.com/@[^/?#]+/?$",
     re.I,
 )
+TIKTOK_CHANNEL_ID_RE = re.compile(
+    r"^tiktokuser:MS4wLjABAAAA[\w-]{64}$",
+    re.I,
+)
 DOUYIN_USER_RE = re.compile(
     r"^https?://(?:www\.)?douyin\.com/user/[^/?#]+/?$",
     re.I,
@@ -230,6 +234,8 @@ def classify_link(url: str) -> tuple[str, str] | None:
     if YOUTUBE_CHANNEL_RE.match(url):
         return "youtube", "all"
     if TIKTOK_PROFILE_RE.match(url):
+        return "tiktok", "profile"
+    if TIKTOK_CHANNEL_ID_RE.match(url):
         return "tiktok", "profile"
     if DOUYIN_USER_RE.match(url):
         return "douyin", "post"

@@ -112,7 +112,10 @@ def _config() -> AppConfig:
 
 
 def _canonical_link(value: str) -> str:
-    parts = urlsplit(value.strip())
+    cleaned = value.strip()
+    if cleaned.lower().startswith("tiktokuser:"):
+        return f"tiktokuser:{cleaned.partition(':')[2]}"
+    parts = urlsplit(cleaned)
     host = parts.netloc.lower().removeprefix("www.")
     path = parts.path.rstrip("/")
     if host == "youtube.com" and path.endswith("/videos"):

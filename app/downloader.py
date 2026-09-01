@@ -80,13 +80,23 @@ def _format_selector(quality: int, platform: str = "") -> str:
         return "download/best"
     if platform == "youtube":
         if limit:
-            # Keep the source's highest quality within the cap. Compatibility
-            # is enforced after download, so AV1/VP9 sources are not discarded.
+            # Prefer streams Facebook can use directly.  YouTube's 4K AV1/VP9
+            # formats otherwise force a lengthy, CPU-bound H.264 conversion.
+            # Keep the generic formats as fallbacks for videos that do not
+            # expose an AVC/AAC rendition.
             return (
+                f"bv*[vcodec^=avc1][height<={limit}]+ba[acodec^=mp4a]/"
+                f"bv*[vcodec^=avc1][width<={limit}]+ba[acodec^=mp4a]/"
+                f"b[vcodec^=avc1][acodec^=mp4a][height<={limit}]/"
+                f"b[vcodec^=avc1][acodec^=mp4a][width<={limit}]/"
                 f"bv*[height<={limit}]+ba/bv*[width<={limit}]+ba/"
                 f"b[height<={limit}]/b[width<={limit}]"
             )
-        return "bv*+ba/b"
+        return (
+            "bv*[vcodec^=avc1]+ba[acodec^=mp4a]/"
+            "b[vcodec^=avc1][acodec^=mp4a]/"
+            "bv*+ba/b"
+        )
     if limit:
         return (
             f"bestvideo[height<={limit}]+bestaudio/"
@@ -239,7 +249,9 @@ class VideoDownloader:
                     f"{media['video_codec'] or 'unknown'}/{media['audio_codec'] or 'silent'}; "
                     "normalizing to MP4 H.264/AAC for Facebook compatibility"
                 )
-                tmp_path = self._normalize_for_facebook(tmp_path, ffmpeg, entry.title)
+                tmp_path = self._normalize_for_facebook(
+                    tmp_path, ffmpeg, entry.title, media, source_id, entry.video_id
+                )
                 media = self._probe_media(tmp_path, ffprobe)
                 media_width, media_height = media["width"], media["height"]
                 if not self._is_facebook_compatible(media):
@@ -329,7 +341,7 @@ class VideoDownloader:
             result = subprocess.run(
                 [
                     ffprobe, "-v", "error", "-show_entries",
-                    "stream=codec_type,codec_name,pix_fmt,width,height", "-of", "json", str(path),
+                    "stream=codec_type,codec_name,pix_fmt,width,height:format=duration", "-of", "json", str(path),
                 ],
                 capture_output=True,
                 text=True,
@@ -339,21 +351,23 @@ class VideoDownloader:
                 check=True,
                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
             )
-            streams = json.loads(result.stdout).get("streams") or []
+            probe_data = json.loads(result.stdout)
+            streams = probe_data.get("streams") or []
             video = next((stream for stream in streams if stream.get("codec_type") == "video"), None)
             audio = next((stream for stream in streams if stream.get("codec_type") == "audio"), None)
             if not video:
-                return {"width": None, "height": None, "video_codec": None, "pixel_format": None, "audio_codec": None}
+                return {"width": None, "height": None, "video_codec": None, "pixel_format": None, "audio_codec": None, "duration": None}
             return {
                 "width": int(video.get("width") or 0) or None,
                 "height": int(video.get("height") or 0) or None,
                 "video_codec": str(video.get("codec_name") or "").lower() or None,
                 "pixel_format": str(video.get("pix_fmt") or "").lower() or None,
                 "audio_codec": str(audio.get("codec_name") or "").lower() or None,
+                "duration": float((probe_data.get("format") or {}).get("duration") or 0) or None,
             }
         except (OSError, ValueError, subprocess.SubprocessError, json.JSONDecodeError) as error:
             self._log(f"Could not inspect downloaded media: {error}")
-            return {"width": None, "height": None, "video_codec": None, "pixel_format": None, "audio_codec": None}
+            return {"width": None, "height": None, "video_codec": None, "pixel_format": None, "audio_codec": None, "duration": None}
 
     @staticmethod
     def _is_facebook_compatible(media: dict[str, int | str | None]) -> bool:
@@ -363,25 +377,35 @@ class VideoDownloader:
             and media.get("audio_codec") in {None, "aac"}
         )
 
-    @staticmethod
-    def _normalize_for_facebook(path: Path, ffmpeg: str, title: str) -> Path:
+    def _normalize_for_facebook(
+        self,
+        path: Path,
+        ffmpeg: str,
+        title: str,
+        media: dict[str, int | str | float | None],
+        source_id: str,
+        video_id: str,
+    ) -> Path:
         normalized = path.with_name(f"{path.stem}.facebook.mp4")
         normalized.unlink(missing_ok=True)
+        copy_video = media.get("video_codec") == "h264" and media.get("pixel_format") == "yuv420p"
+        copy_audio = media.get("audio_codec") in {None, "aac"}
+        video_args = ["-c:v", "copy"] if copy_video else ["-c:v", "libx264", "-preset", "medium", "-crf", "18", "-pix_fmt", "yuv420p"]
+        audio_args = ["-c:a", "copy"] if copy_audio else ["-c:a", "aac", "-b:a", "192k"]
+        conversion = "remuxing compatible video" if copy_video else "encoding video to H.264"
+        self._log(f"Facebook compatibility: {conversion} for {title}")
+        self._progress_event({"stage": "converting", "source_id": source_id, "video_id": video_id, "title": title, "percent": 0})
         try:
-            subprocess.run(
+            self._run_ffmpeg_with_progress(
                 [
                     ffmpeg, "-y", "-i", str(path), "-map", "0:v:0", "-map", "0:a?",
-                    "-c:v", "libx264", "-preset", "medium", "-crf", "18",
-                    "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "192k",
-                    "-movflags", "+faststart", str(normalized),
+                    *video_args, *audio_args, "-movflags", "+faststart",
+                    "-progress", "pipe:1", "-nostats", str(normalized),
                 ],
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                timeout=60 * 30,
-                check=True,
-                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                title=title,
+                duration=media.get("duration"),
+                source_id=source_id,
+                video_id=video_id,
             )
         except (OSError, subprocess.SubprocessError) as error:
             normalized.unlink(missing_ok=True)
@@ -391,6 +415,44 @@ class VideoDownloader:
             raise RuntimeError(f"Could not convert {title} to H.264/AAC")
         path.unlink(missing_ok=True)
         return normalized
+
+    def _run_ffmpeg_with_progress(
+        self, command: list[str], *, title: str, duration: object, source_id: str, video_id: str
+    ) -> None:
+        """Run ffmpeg without leaving the UI silent during long 4K conversions."""
+        total_seconds = float(duration) if isinstance(duration, (float, int)) and duration else None
+        process = subprocess.Popen(
+            command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        last_report = 0.0
+        output: list[str] = []
+        assert process.stdout is not None
+        for line in process.stdout:
+            output.append(line)
+            if not line.startswith(("out_time_us=", "out_time_ms=")):
+                continue
+            try:
+                elapsed = int(line.partition("=")[2]) / 1_000_000
+            except ValueError:
+                continue
+            now = time.monotonic()
+            if now - last_report < 5:
+                continue
+            last_report = now
+            percent = min(99.9, round(elapsed * 100 / total_seconds, 1)) if total_seconds else None
+            label = f"{percent}%" if percent is not None else f"{int(elapsed)}s processed"
+            self._progress_log(f"Converting | {title} | {label}")
+            self._progress_event({"stage": "converting", "source_id": source_id, "video_id": video_id, "title": title, "percent": percent})
+        if process.wait() != 0:
+            detail = self._clean_error_text("".join(output)[-4000:])
+            raise subprocess.CalledProcessError(process.returncode, command, output=detail)
+        self._progress_event({"stage": "converting", "source_id": source_id, "video_id": video_id, "title": title, "percent": 100})
 
     @staticmethod
     def _download_tiktok_safari_fallback(

@@ -1,6 +1,6 @@
 {
   "name": "tool-download-video",
-  "version": "1.0.8",
+  "version": "1.0.9",
   "description": "Reup Studio desktop workspace for video sourcing, review and downloads",
   "main": "main.js",
   "scripts": {

@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
+import re
 import shutil
 from typing import Callable
 from urllib.parse import urlsplit
 
 import yt_dlp
+from curl_cffi import requests as curl_requests
+from http.cookiejar import MozillaCookieJar
 
 from app.config_models import GlobalConfig, SourceConfig, classify_link
 from app.ytdlp_cookies import apply_tiktok_cookies, apply_youtube_cookies, cookie_file_fallback_options, is_browser_cookie_locked
@@ -51,6 +55,9 @@ class _YtdlpLogger:
         if _is_missing_tab(text):
             # Soft skip — channel has no /shorts or /videos tab
             self._log(f"Skip: {text.strip()}")
+            return
+        if "unable to extract secondary user id" in text.lower():
+            # The TikTok profile fallback resolves this from a recent embed video.
             return
         self._log(f"yt-dlp: {text}")
 
@@ -120,6 +127,81 @@ def _extract_info_with_cookie_fallback(
             log("Browser cookies are locked; retrying with cookies.txt")
         with yt_dlp.YoutubeDL(fallback_opts) as ydl:
             return ydl.extract_info(url, download=False)
+
+
+def _extract_tiktok_profile_with_fallback(
+    opts: dict, url: str, *, cookies_file: str | None = None, log: Callable[[str], None] | None = None,
+) -> dict | None:
+    """Recover TikTok's secondary user ID from the profile's embed page.
+
+    TikTok sometimes serves a challenge page for the normal profile extractor.
+    The embed page still exposes a recent video ID; the video extractor then
+    provides ``channel_id`` and lets yt-dlp use its normal profile API.
+    """
+    try:
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+            if info:
+                return info
+            raise RuntimeError("TikTok profile extractor returned no data")
+    except Exception as original:
+        parts = urlsplit(url)
+        host = parts.netloc.lower().removeprefix("www.")
+        if host != "tiktok.com" or not parts.path.startswith("/@"):
+            raise
+        username = parts.path[2:].split("/", 1)[0]
+        cookies: dict[str, str] = {}
+        if cookies_file:
+            try:
+                jar = MozillaCookieJar(str(cookies_file))
+                jar.load(ignore_discard=True, ignore_expires=False)
+                cookies = {c.name: c.value for c in jar if "tiktok" in c.domain.lower()}
+            except Exception:
+                pass
+        video_id = None
+        for client in ("safari", "edge"):
+            try:
+                response = curl_requests.get(
+                    f"https://www.tiktok.com/embed/@{username}",
+                    impersonate=client, cookies=cookies or None, timeout=20,
+                )
+                match = re.search(
+                    r'<script[^>]+id=["\']__FRONTITY_CONNECT_STATE__["\'][^>]*>(.*?)</script>',
+                    response.text, re.S,
+                )
+                if not match:
+                    continue
+                state = json.loads(match.group(1))
+                data = next(
+                    (value for key, value in (state.get("source", {}).get("data", {}) or {}).items()
+                     if key.rstrip("/").lower() == f"/embed/@{username}".lower()),
+                    {},
+                )
+                video_id = next((item.get("id") for item in data.get("videoList", []) if item.get("id")), None)
+                if video_id:
+                    break
+            except Exception:
+                continue
+        if not video_id:
+            raise original
+
+        # Import lazily to avoid the playlist ↔ downloader module cycle.
+        from app.downloader import VideoDownloader
+        entry = VideoEntry(str(video_id), str(video_id), f"https://www.tiktok.com/@{username}/video/{video_id}", "tiktok", None, None)
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            detail = VideoDownloader._extract_tiktok_safari_info(ydl, entry)
+            channel_id = detail.get("channel_id")
+        if not channel_id:
+            raise original
+        fallback_url = f"tiktokuser:{channel_id}"
+        if log:
+            log("TikTok profile blocked; recovered channel_id automatically from a recent public video")
+        retry_opts = dict(opts)
+        with yt_dlp.YoutubeDL(retry_opts) as ydl:
+            # Return the extractor's entry generator directly. Passing a large
+            # account back through YoutubeDL.extract_info would eagerly walk
+            # thousands of posts before the batched crawler receives item one.
+            return ydl.get_info_extractor("TikTokUser").extract(fallback_url)
 
 
 def _match_filter_for_link(content_type: str) -> str | None:
@@ -214,12 +296,17 @@ def fetch_all_entries(
 
             log(f"Crawling: {crawl_link}")
             try:
-                info = _extract_info_with_cookie_fallback(
-                    opts,
-                    crawl_link,
-                    cookies_file=global_cfg.youtube_cookies_file if platform == "youtube" else None,
-                    log=log,
-                )
+                if platform == "tiktok" and crawl_type == "profile":
+                    info = _extract_tiktok_profile_with_fallback(
+                        opts, crawl_link, cookies_file=global_cfg.tiktok_cookies_file, log=log
+                    )
+                else:
+                    info = _extract_info_with_cookie_fallback(
+                        opts,
+                        crawl_link,
+                        cookies_file=global_cfg.youtube_cookies_file if platform == "youtube" else None,
+                        log=log,
+                    )
             except Exception as e:
                 if _is_missing_tab(str(e)):
                     log(f"Skip (no {crawl_type} tab): {crawl_link}")
@@ -278,12 +365,17 @@ def fetch_entries_batched(
                 opts["match_filter"] = match_filter
             log(f"Crawling: {crawl_link}")
             try:
-                info = _extract_info_with_cookie_fallback(
-                    opts,
-                    crawl_link,
-                    cookies_file=global_cfg.youtube_cookies_file if platform == "youtube" else None,
-                    log=log,
-                )
+                if platform == "tiktok" and crawl_type == "profile":
+                    info = _extract_tiktok_profile_with_fallback(
+                        opts, crawl_link, cookies_file=global_cfg.tiktok_cookies_file, log=log
+                    )
+                else:
+                    info = _extract_info_with_cookie_fallback(
+                        opts,
+                        crawl_link,
+                        cookies_file=global_cfg.youtube_cookies_file if platform == "youtube" else None,
+                        log=log,
+                    )
                 entries = (info or {}).get("entries") or [info]
                 known_streak = 0
                 for raw in entries:
