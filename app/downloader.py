@@ -83,20 +83,25 @@ def _format_selector(quality: int, platform: str = "") -> str:
         return "best[vcodec^=avc1]/best[vcodec^=h264]/download/best"
     if platform == "youtube":
         if limit:
-            # The two strict branches support both landscape (height) and
-            # portrait (width) videos without an uncapped fallback.
+            # Prefer H.264/AVC so the resulting MP4 plays in Windows/Electron.
+            # The height/width branches support both landscape and portrait
+            # videos without bypassing the configured resolution cap.
             return (
-                f"bv[height<={limit}]+ba/bv[width<={limit}]+ba/"
+                f"bv*[vcodec^=avc1][height<={limit}]+ba/"
+                f"bv*[vcodec^=avc1][width<={limit}]+ba/"
+                f"bv*[height<={limit}]+ba/bv*[width<={limit}]+ba/"
                 f"b[height<={limit}]/b[width<={limit}]"
             )
-        return "bv*+ba/b"
+        return "bv*[vcodec^=avc1]+ba/bv*+ba/b"
     if limit:
         return (
+            f"bestvideo[vcodec^=avc1][height<={limit}]+bestaudio/"
+            f"bestvideo[vcodec^=avc1][width<={limit}]+bestaudio/"
             f"bestvideo[height<={limit}]+bestaudio/"
             f"bestvideo[width<={limit}]+bestaudio/"
             f"best[height<={limit}]/best[width<={limit}]"
         )
-    return "bestvideo+bestaudio/best"
+    return "bestvideo[vcodec^=avc1]+bestaudio/bestvideo+bestaudio/best"
 
 
 class VideoDownloader:
@@ -358,8 +363,8 @@ class VideoDownloader:
         selected = max(
             formats,
             key=lambda f: (
-                min(f.get("width") or 0, f.get("height") or 0),
                 1 if str(f.get("vcodec") or "").lower().startswith(("avc", "h264")) else 0,
+                min(f.get("width") or 0, f.get("height") or 0),
                 f.get("tbr") or 0,
             ),
         )
