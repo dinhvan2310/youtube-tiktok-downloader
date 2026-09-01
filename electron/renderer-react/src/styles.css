@@ -310,9 +310,11 @@
 .settings-page .settings-layout{
   flex:1;
   flex-basis:0;
-  height:0;
+  height:auto;
   min-height:0;
-  max-height:100%;
+  max-height:none;
+  align-content:start;
+  grid-auto-rows:max-content;
   overflow:auto;
   overscroll-behavior:contain;
   scrollbar-gutter:stable;
