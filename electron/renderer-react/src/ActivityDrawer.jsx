@@ -41,7 +41,7 @@ function LogIcon({ level }) {
 export function ActivityDrawer({ open, onOpenChange }) {
   const queryClient = useQueryClient()
   const logRef = useRef(null)
-  const [filter, setFilter] = useState('all')
+  const [filter, setFilter] = useState('running')
   const [search, setSearch] = useState('')
   const [selectedId, setSelectedId] = useState('')
   const [logFilter, setLogFilter] = useState('all')
