@@ -18,7 +18,7 @@ from app.db import DownloadDB
 from app.filename import sanitize_title, unique_filepath
 from app.paths import resolve_ffmpeg, resolve_ffprobe, resolve_node
 from app.playlist import VideoEntry
-from app.ytdlp_cookies import apply_tiktok_cookies, apply_youtube_cookies, cookie_file_fallback_options, is_browser_cookie_locked
+from app.ytdlp_cookies import apply_tiktok_cookies, apply_youtube_cookies, cookie_file_fallback_options, cookie_file_issue, is_browser_cookie_locked
 
 _download_condition = threading.Condition()
 _active_downloads = 0
@@ -136,7 +136,14 @@ class VideoDownloader:
             # Prefer the best short-edge resolution within the configured cap,
             # then H264 over silent bytevc1/h265 when sorting ties.
             opts["format_sort"] = ([f"res:{quality_limit}"] if quality_limit else ["res"]) + ["vcodec:h264", "br"]
-            apply_tiktok_cookies(opts, cookies_file=self.global_cfg.tiktok_cookies_file)
+            cookie_path = self.global_cfg.tiktok_cookies_file
+            cookie_issue = cookie_file_issue(cookie_path, domain=".tiktok.com")
+            if cookie_path:
+                if cookie_issue:
+                    self._log(f"TikTok cookies unavailable ({cookie_issue}); continuing without cookie file")
+                else:
+                    self._log("TikTok cookies file detected and attached to extractor")
+            apply_tiktok_cookies(opts, cookies_file=cookie_path)
         elif entry.platform == "youtube":
             if quality_limit:
                 opts["format_sort"] = [f"res:{quality_limit}"]
@@ -242,7 +249,11 @@ class VideoDownloader:
                 auth_hint = "Open Settings → YouTube access, then select your signed-in browser or a cookies.txt file."
                 clean_error = f"YouTube needs account verification. {auth_hint}"
             elif entry.platform == "tiktok" and self._is_tiktok_cookie_error(clean_error):
-                clean_error = "TikTok needs fresh access cookies. Open Settings → Platform access and select a TikTok cookies.txt file."
+                cookie_issue = cookie_file_issue(self.global_cfg.tiktok_cookies_file, domain=".tiktok.com")
+                if cookie_issue:
+                    clean_error = f"TikTok cookies are not usable ({cookie_issue}). Export a Netscape cookies.txt containing TikTok cookies, then save it in Settings."
+                else:
+                    clean_error = "TikTok rejected the webpage challenge even with the configured cookie file. Re-export fresh Netscape cookies while signed in, then retry; this is an upstream TikTok/yt-dlp challenge failure."
             if progress_state["last_download_line"]:
                 self._progress_log(f"{progress_state['last_download_line']}ERROR: {clean_error}")
             else:

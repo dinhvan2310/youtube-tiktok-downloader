@@ -7,6 +7,8 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import unquote
 
+from app.ytdlp_cookies import cookie_file_issue
+
 # ponytail: permissive slug after @, channel/, c/, user/; unquote runs before match in classify_link.
 _YT_CHANNEL = r"(?:@[^/?#]+|channel/[^/?#]+|c/[^/?#]+|user/[^/?#]+)"
 _YT_BASE = rf"^https?://(?:www\.)?youtube\.com/{_YT_CHANNEL}"
@@ -283,7 +285,11 @@ def validate_global_config(cfg: GlobalConfig) -> list[str]:
         errors.append("Global downloads must be between 1 and 32")
     if not 1 <= cfg.metadata_workers <= 16:
         errors.append("Metadata workers must be between 1 and 16")
-    for label, cookie_path in (("YouTube", cfg.youtube_cookies_file), ("TikTok", cfg.tiktok_cookies_file)):
-        if cookie_path and not Path(cookie_path).is_file():
-            errors.append(f"{label} cookies file not found: {cookie_path}")
+    for label, cookie_path, domain in (
+        ("YouTube", cfg.youtube_cookies_file, ".youtube.com"),
+        ("TikTok", cfg.tiktok_cookies_file, ".tiktok.com"),
+    ):
+        issue = cookie_file_issue(cookie_path, domain=domain)
+        if issue:
+            errors.append(f"{label} cookies {issue}: {cookie_path}")
     return errors

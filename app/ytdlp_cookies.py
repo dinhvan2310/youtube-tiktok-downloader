@@ -13,6 +13,36 @@ def _existing_cookie_file(value: str | None) -> str:
     return file_path if file_path and Path(file_path).is_file() else ""
 
 
+def cookie_file_issue(value: str | None, *, domain: str | None = None) -> str | None:
+    """Return a safe, actionable validation message for an exported cookie jar.
+
+    Only the Netscape header and domain columns are inspected; cookie names and
+    values are never logged or returned.
+    """
+    file_path = (value or "").strip()
+    if not file_path:
+        return None
+    path = Path(file_path)
+    if not path.is_file():
+        return "file not found"
+    try:
+        lines = path.read_text(encoding="utf-8-sig", errors="replace").splitlines()
+    except OSError:
+        return "file cannot be read"
+    first = next((line.strip() for line in lines if line.strip()), "")
+    if first not in {"# HTTP Cookie File", "# Netscape HTTP Cookie File"}:
+        return "must be a Netscape cookies.txt export"
+    if domain:
+        needle = domain.lower().lstrip(".")
+        has_domain = any(
+            line and not line.startswith("#") and line.split("\t", 1)[0].lower().lstrip(".").endswith(needle)
+            for line in lines
+        )
+        if not has_domain:
+            return f"contains no {domain} cookies"
+    return None
+
+
 def normalize_youtube_cookie_browser(value: str | None) -> str:
     """Return a yt-dlp supported local browser name, or an empty value."""
     browser = (value or "").strip().lower()
