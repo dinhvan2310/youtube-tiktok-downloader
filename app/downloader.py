@@ -69,39 +69,31 @@ def _download_slot(limit: int):
 def _format_selector(quality: int, platform: str = "") -> str:
     limit = max(0, int(quality))
     if platform == "tiktok":
-        # bytevc1/h265 often advertises AAC but the file is video-only (silent).
         # Resolution is constrained separately via format_sort so portrait videos
         # are evaluated by their short edge instead of raw height.
         if limit:
             return (
-                f"best[vcodec^=avc1][height<={limit}]/"
-                f"best[vcodec^=h264][height<={limit}]/"
-                f"best[vcodec^=avc1][width<={limit}]/"
-                f"best[vcodec^=h264][width<={limit}]/"
+                f"best[height<={limit}]/"
+                f"best[width<={limit}]/"
                 f"download[height<={limit}]/download[width<={limit}]"
             )
-        return "best[vcodec^=avc1]/best[vcodec^=h264]/download/best"
+        return "download/best"
     if platform == "youtube":
         if limit:
-            # Prefer H.264/AVC so the resulting MP4 plays in Windows/Electron.
-            # The height/width branches support both landscape and portrait
-            # videos without bypassing the configured resolution cap.
+            # Keep the source's highest quality within the cap. Compatibility
+            # is enforced after download, so AV1/VP9 sources are not discarded.
             return (
-                f"bv*[vcodec^=avc1][height<={limit}]+ba/"
-                f"bv*[vcodec^=avc1][width<={limit}]+ba/"
                 f"bv*[height<={limit}]+ba/bv*[width<={limit}]+ba/"
                 f"b[height<={limit}]/b[width<={limit}]"
             )
-        return "bv*[vcodec^=avc1]+ba/bv*+ba/b"
+        return "bv*+ba/b"
     if limit:
         return (
-            f"bestvideo[vcodec^=avc1][height<={limit}]+bestaudio/"
-            f"bestvideo[vcodec^=avc1][width<={limit}]+bestaudio/"
             f"bestvideo[height<={limit}]+bestaudio/"
             f"bestvideo[width<={limit}]+bestaudio/"
             f"best[height<={limit}]/best[width<={limit}]"
         )
-    return "bestvideo[vcodec^=avc1]+bestaudio/bestvideo+bestaudio/best"
+    return "bestvideo+bestaudio/best"
 
 
 class VideoDownloader:
@@ -159,9 +151,9 @@ class VideoDownloader:
         }
         if entry.platform == "tiktok":
             opts["logger"] = _QuietExtractorLogger()
-            # Prefer the best short-edge resolution within the configured cap,
-            # then H264 over silent bytevc1/h265 when sorting ties.
-            opts["format_sort"] = ([f"res:{quality_limit}"] if quality_limit else ["res"]) + ["vcodec:h264", "br"]
+            # Prefer the best short-edge resolution within the configured cap.
+            # The final output is normalized to H.264/AAC after download.
+            opts["format_sort"] = ([f"res:{quality_limit}"] if quality_limit else ["res"]) + ["br"]
             cookie_path = self.global_cfg.tiktok_cookies_file
             cookie_issue = cookie_file_issue(cookie_path, domain=".tiktok.com")
             if cookie_path:
@@ -182,19 +174,19 @@ class VideoDownloader:
         ffprobe = resolve_ffprobe()
         if ffmpeg:
             opts["ffmpeg_location"] = str(Path(ffmpeg).parent)
-        elif entry.platform == "youtube":
+        else:
             return self._fail_before_download(
                 source_id,
                 entry,
                 page_dir,
-                "FFmpeg is required for best-quality YouTube downloads. Reinstall or rebuild the app to restore its media tools.",
+                "FFmpeg is required to produce Facebook-compatible downloads. Reinstall or rebuild the app to restore its media tools.",
             )
-        if quality_limit and not ffprobe:
+        if not ffprobe:
             return self._fail_before_download(
                 source_id,
                 entry,
                 page_dir,
-                "FFprobe is required to verify the configured resolution limit. Reinstall or rebuild the app to restore its media tools.",
+                "FFprobe is required to verify the downloaded video codec and resolution. Reinstall or rebuild the app to restore its media tools.",
             )
 
         try:
@@ -239,14 +231,26 @@ class VideoDownloader:
                 self._log(f"File not found after download: {entry.title}")
                 return DownloadResult("failed")
 
-            media_width, media_height = self._probe_resolution(tmp_path, ffprobe)
+            media = self._probe_media(tmp_path, ffprobe)
+            media_width, media_height = media["width"], media["height"]
+            if not self._is_facebook_compatible(media):
+                self._log(
+                    f"Source format {media_width or '?'}x{media_height or '?'} "
+                    f"{media['video_codec'] or 'unknown'}/{media['audio_codec'] or 'silent'}; "
+                    "normalizing to MP4 H.264/AAC for Facebook compatibility"
+                )
+                tmp_path = self._normalize_for_facebook(tmp_path, ffmpeg, entry.title)
+                media = self._probe_media(tmp_path, ffprobe)
+                media_width, media_height = media["width"], media["height"]
+                if not self._is_facebook_compatible(media):
+                    raise RuntimeError("Could not produce an MP4 H.264/AAC file for Facebook upload")
             media_resolution = min(media_width, media_height) if media_width and media_height else None
-            if quality_limit and media_resolution is None:
+            if media_resolution is None:
                 return self._fail_before_download(
                     source_id,
                     entry,
                     page_dir,
-                    "Downloaded file could not be verified, so it was removed instead of bypassing the resolution setting.",
+                    "Downloaded file could not be verified, so it was removed instead of bypassing the media compatibility checks.",
                 )
             if quality_limit and media_resolution > quality_limit:
                 return self._fail_before_download(
@@ -275,11 +279,13 @@ class VideoDownloader:
                 return DownloadResult("skipped")
 
             resolution_detail = f" ({media_width}x{media_height})" if media_width and media_height else ""
-            self._log(f"Downloaded: {downloaded_path.name}{resolution_detail}")
+            codec_detail = f" · {media['video_codec'] or 'unknown'}/{media['audio_codec'] or 'silent'}"
+            self._log(f"Downloaded: {downloaded_path.name}{resolution_detail}{codec_detail}")
             self._progress_event({
                 "stage": "completed", "source_id": source_id, "video_id": entry.video_id,
                 "title": entry.title, "width": media_width, "height": media_height,
                 "resolution": media_resolution, "quality_limit": quality_limit,
+                "video_codec": media["video_codec"], "audio_codec": media["audio_codec"],
             })
             return DownloadResult("downloaded")
 
@@ -318,14 +324,12 @@ class VideoDownloader:
         self._log(f"Download error {entry.title}: {message}")
         return DownloadResult("failed")
 
-    def _probe_resolution(self, path: Path, ffprobe: str | None) -> tuple[int | None, int | None]:
-        if not ffprobe:
-            return None, None
+    def _probe_media(self, path: Path, ffprobe: str) -> dict[str, int | str | None]:
         try:
             result = subprocess.run(
                 [
-                    ffprobe, "-v", "error", "-select_streams", "v:0",
-                    "-show_entries", "stream=width,height", "-of", "json", str(path),
+                    ffprobe, "-v", "error", "-show_entries",
+                    "stream=codec_type,codec_name,pix_fmt,width,height", "-of", "json", str(path),
                 ],
                 capture_output=True,
                 text=True,
@@ -336,14 +340,57 @@ class VideoDownloader:
                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
             )
             streams = json.loads(result.stdout).get("streams") or []
-            if not streams:
-                return None, None
-            width = int(streams[0].get("width") or 0) or None
-            height = int(streams[0].get("height") or 0) or None
-            return width, height
+            video = next((stream for stream in streams if stream.get("codec_type") == "video"), None)
+            audio = next((stream for stream in streams if stream.get("codec_type") == "audio"), None)
+            if not video:
+                return {"width": None, "height": None, "video_codec": None, "pixel_format": None, "audio_codec": None}
+            return {
+                "width": int(video.get("width") or 0) or None,
+                "height": int(video.get("height") or 0) or None,
+                "video_codec": str(video.get("codec_name") or "").lower() or None,
+                "pixel_format": str(video.get("pix_fmt") or "").lower() or None,
+                "audio_codec": str(audio.get("codec_name") or "").lower() or None,
+            }
         except (OSError, ValueError, subprocess.SubprocessError, json.JSONDecodeError) as error:
-            self._log(f"Could not inspect downloaded resolution: {error}")
-            return None, None
+            self._log(f"Could not inspect downloaded media: {error}")
+            return {"width": None, "height": None, "video_codec": None, "pixel_format": None, "audio_codec": None}
+
+    @staticmethod
+    def _is_facebook_compatible(media: dict[str, int | str | None]) -> bool:
+        return (
+            media.get("video_codec") == "h264"
+            and media.get("pixel_format") == "yuv420p"
+            and media.get("audio_codec") in {None, "aac"}
+        )
+
+    @staticmethod
+    def _normalize_for_facebook(path: Path, ffmpeg: str, title: str) -> Path:
+        normalized = path.with_name(f"{path.stem}.facebook.mp4")
+        normalized.unlink(missing_ok=True)
+        try:
+            subprocess.run(
+                [
+                    ffmpeg, "-y", "-i", str(path), "-map", "0:v:0", "-map", "0:a?",
+                    "-c:v", "libx264", "-preset", "medium", "-crf", "18",
+                    "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "192k",
+                    "-movflags", "+faststart", str(normalized),
+                ],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=60 * 30,
+                check=True,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+        except (OSError, subprocess.SubprocessError) as error:
+            normalized.unlink(missing_ok=True)
+            raise RuntimeError(f"Could not convert {title} to H.264/AAC: {error}") from error
+        if not normalized.exists() or normalized.stat().st_size == 0:
+            normalized.unlink(missing_ok=True)
+            raise RuntimeError(f"Could not convert {title} to H.264/AAC")
+        path.unlink(missing_ok=True)
+        return normalized
 
     @staticmethod
     def _download_tiktok_safari_fallback(
