@@ -193,27 +193,30 @@ class VideoDownloader:
             )
 
         try:
-            try:
-                with yt_dlp.YoutubeDL(opts) as ydl:
-                    info = ydl.extract_info(entry.url, download=True)
-            except Exception as error:
-                fallback_opts = cookie_file_fallback_options(opts, self.global_cfg.youtube_cookies_file)
-                if fallback_opts and is_browser_cookie_locked(error):
+            if entry.platform == "tiktok":
+                # TikTok's default yt-dlp webpage client is currently served a
+                # challenge document. Use the CDN fallback first so the normal
+                # path never emits a false failure before a successful retry.
+                self._log("TikTok: using browser-compatible webpage/CDN download")
+                fallback_opts = dict(opts)
+                fallback_opts["impersonate"] = ImpersonateTarget("safari")
+                fallback_opts["http_headers"] = {
+                    **(fallback_opts.get("http_headers") or {}),
+                    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.6 Safari/605.1.15",
+                }
+                with yt_dlp.YoutubeDL(fallback_opts) as ydl:
+                    info = self._download_tiktok_safari_fallback(ydl, entry, tmp_outtmpl, quality_limit, opts)
+            else:
+                try:
+                    with yt_dlp.YoutubeDL(opts) as ydl:
+                        info = ydl.extract_info(entry.url, download=True)
+                except Exception as error:
+                    fallback_opts = cookie_file_fallback_options(opts, self.global_cfg.youtube_cookies_file)
+                    if not fallback_opts or not is_browser_cookie_locked(error):
+                        raise
                     self._log("Browser cookies are locked; retrying this video with cookies.txt")
                     with yt_dlp.YoutubeDL(fallback_opts) as ydl:
                         info = ydl.extract_info(entry.url, download=True)
-                elif entry.platform == "tiktok" and self._is_tiktok_cookie_error(str(error)):
-                    self._log("TikTok web challenge blocked the default client; retrying with Safari-compatible webpage fallback")
-                    fallback_opts = dict(opts)
-                    fallback_opts["impersonate"] = ImpersonateTarget("safari")
-                    fallback_opts["http_headers"] = {
-                        **(fallback_opts.get("http_headers") or {}),
-                        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.6 Safari/605.1.15",
-                    }
-                    with yt_dlp.YoutubeDL(fallback_opts) as ydl:
-                        info = self._download_tiktok_safari_fallback(ydl, entry, tmp_outtmpl, quality_limit, opts)
-                else:
-                    raise
             if not info:
                 self._cleanup_entry_files(page_dir, entry.video_id)
                 self._log(f"Download failed: {entry.title}")
@@ -280,12 +283,12 @@ class VideoDownloader:
             if entry.platform == "youtube" and self._is_youtube_bot_check(clean_error):
                 auth_hint = "Open Settings → YouTube access, then select your signed-in browser or a cookies.txt file."
                 clean_error = f"YouTube needs account verification. {auth_hint}"
-            elif entry.platform == "tiktok" and self._is_tiktok_cookie_error(clean_error):
+            elif entry.platform == "tiktok":
                 cookie_issue = cookie_file_issue(self.global_cfg.tiktok_cookies_file, domain=".tiktok.com")
                 if cookie_issue:
-                    clean_error = f"TikTok cookies are not usable ({cookie_issue}). Export a Netscape cookies.txt containing TikTok cookies, then save it in Settings."
+                    clean_error = f"TikTok fallback could not use cookies ({cookie_issue}). Export a Netscape cookies.txt containing TikTok cookies, then save it in Settings."
                 else:
-                    clean_error = "TikTok rejected the webpage challenge even with the configured cookie file. Re-export fresh Netscape cookies while signed in, then retry; this is an upstream TikTok/yt-dlp challenge failure."
+                    clean_error = f"TikTok fallback download failed: {clean_error}"
             if progress_state["last_download_line"]:
                 self._progress_log(f"{progress_state['last_download_line']}ERROR: {clean_error}")
             else:
