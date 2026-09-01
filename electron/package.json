@@ -1,6 +1,6 @@
 {
   "name": "tool-download-video",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "description": "Electron desktop client for Tool Download Video",
   "main": "main.js",
   "scripts": {

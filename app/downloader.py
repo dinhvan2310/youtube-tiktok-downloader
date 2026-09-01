@@ -8,10 +8,13 @@ import time
 import threading
 from contextlib import contextmanager
 from dataclasses import dataclass
+from http.cookiejar import MozillaCookieJar
 from pathlib import Path
 from typing import Callable
 
 import yt_dlp
+from curl_cffi import requests as curl_requests
+from yt_dlp.extractor.tiktok import TikTokIE
 
 from app.config_models import GlobalConfig
 from app.db import DownloadDB
@@ -182,6 +185,13 @@ class VideoDownloader:
                 self._log("Browser cookies are locked; retrying this video with cookies.txt")
                 with yt_dlp.YoutubeDL(fallback_opts) as ydl:
                     info = ydl.extract_info(entry.url, download=True)
+            except Exception as error:
+                if entry.platform != "tiktok" or not self._is_tiktok_cookie_error(str(error)):
+                    raise
+                self._log("TikTok web challenge blocked the default client; retrying with Safari-compatible webpage fallback")
+                with yt_dlp.YoutubeDL(opts) as ydl:
+                    fallback_info = self._extract_tiktok_safari_info(ydl, entry)
+                    info = ydl.process_ie_result(fallback_info, download=True)
             if not info:
                 self._cleanup_entry_files(page_dir, entry.video_id)
                 self._log(f"Download failed: {entry.title}")
@@ -304,6 +314,53 @@ class VideoDownloader:
         except (OSError, ValueError, subprocess.SubprocessError, json.JSONDecodeError) as error:
             self._log(f"Could not inspect downloaded resolution: {error}")
             return None, None
+
+    @staticmethod
+    def _extract_tiktok_safari_info(ydl: yt_dlp.YoutubeDL, entry: VideoEntry) -> dict:
+        """Extract TikTok universal data through a less-blocked browser fingerprint.
+
+        TikTok currently serves a tiny challenge page to yt-dlp's default
+        impersonation target, while Safari/Edge-compatible clients still
+        receive the normal universal-data document. The parsed result is fed
+        back into yt-dlp, so format selection, progress hooks and ffmpeg remain
+        unchanged.
+        """
+        marker = "__UNIVERSAL_DATA_FOR_REHYDRATION__"
+        last_error = "Safari fallback response did not contain TikTok universal data"
+        cookies = {}
+        cookie_path = ydl.params.get("cookiefile")
+        if cookie_path:
+            try:
+                jar = MozillaCookieJar(str(cookie_path))
+                jar.load(ignore_discard=True, ignore_expires=False)
+                cookies = {cookie.name: cookie.value for cookie in jar if "tiktok" in cookie.domain.lower()}
+            except Exception:
+                # The normal yt-dlp path already validates the cookie jar; the
+                # fallback can still work for public posts if parsing fails.
+                cookies = {}
+        # TikTok varies its response by TLS/browser fingerprint. Try the two
+        # fingerprints that currently return the full HTML document on Windows.
+        for client in ("safari", "edge"):
+            try:
+                response = curl_requests.get(entry.url, impersonate=client, cookies=cookies or None, timeout=30)
+                response.raise_for_status()
+                webpage = response.text
+                marker_pos = webpage.find(marker)
+                if marker_pos < 0:
+                    continue
+                start = webpage.find(">", marker_pos)
+                end = webpage.find("</script>", start)
+                if start < 0 or end < 0:
+                    last_error = "Safari fallback response contained malformed TikTok data"
+                    continue
+                scope = json.loads(webpage[start + 1:end]).get("__DEFAULT_SCOPE__", {})
+                detail = ((scope.get("webapp.video-detail") or {}).get("itemInfo") or {}).get("itemStruct")
+                if isinstance(detail, dict):
+                    return TikTokIE(ydl)._parse_aweme_video_web(detail, entry.url, entry.video_id)
+                last_error = "Safari fallback response did not contain TikTok video data"
+            except Exception as error:
+                last_error = str(error)
+        raise RuntimeError(last_error)
 
     @staticmethod
     def _is_youtube_bot_check(message: str) -> bool:
