@@ -283,4 +283,7 @@ def validate_global_config(cfg: GlobalConfig) -> list[str]:
         errors.append("Global downloads must be between 1 and 32")
     if not 1 <= cfg.metadata_workers <= 16:
         errors.append("Metadata workers must be between 1 and 16")
+    for label, cookie_path in (("YouTube", cfg.youtube_cookies_file), ("TikTok", cfg.tiktok_cookies_file)):
+        if cookie_path and not Path(cookie_path).is_file():
+            errors.append(f"{label} cookies file not found: {cookie_path}")
     return errors

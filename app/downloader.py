@@ -252,7 +252,7 @@ class VideoDownloader:
             if self._is_gone_video_error(clean_error):
                 self.db.delete_crawled(source_id, entry.video_id)
                 self._log(f"Dropped from queue (gone): {entry.title}")
-            self._log(f"Download error {entry.title}: {e}")
+            self._log(f"Download error {entry.title}: {clean_error}")
             return DownloadResult("failed")
 
     def _fail_before_download(
@@ -302,7 +302,10 @@ class VideoDownloader:
     @staticmethod
     def _is_tiktok_cookie_error(message: str) -> bool:
         lower = message.lower()
-        markers = ("fresh cookies", "login required", "status code 403", "http error 403", "forbidden")
+        markers = (
+            "fresh cookies", "login required", "status code 403", "http error 403", "forbidden",
+            "unexpected response from webpage request", "challenge",
+        )
         return any(marker in lower for marker in markers)
 
     @staticmethod

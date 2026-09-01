@@ -308,7 +308,10 @@
 .sources-page .sources-table thead{position:sticky;top:0;z-index:2}
 .settings-page .settings-layout{
   flex:1;
+  flex-basis:0;
+  height:0;
   min-height:0;
+  max-height:100%;
   overflow:auto;
   overscroll-behavior:contain;
   scrollbar-gutter:stable;
@@ -320,6 +323,7 @@
 main{height:100%;min-height:0;display:flex;flex-direction:column;overflow:hidden}
 .topbar{flex:none}
 .page-frame{flex:1;min-height:0;overflow:auto}
+.page-frame{height:100%}
 .page-frame-review,.page-frame-sources,.page-frame-settings{overflow:hidden}
 .review-page,.sources-page,.settings-page{height:100%}
 @media(max-width:900px){
