@@ -55,6 +55,7 @@ class JobPayload(BaseModel):
 
 class FilePayload(BaseModel):
     path: str
+    root_path: str = ""
 
 
 class SourcePayload(BaseModel):
@@ -375,6 +376,25 @@ def restore_source(source_id: str) -> dict[str, str]:
     return {"status": "active"}
 
 
+@app.delete("/api/sources/{source_id}")
+def delete_source(source_id: str) -> dict[str, Any]:
+    cfg = _config()
+    source = next((item for item in cfg.sources if item.id == source_id), None)
+    if not source:
+        raise HTTPException(404, detail="Source not found")
+    status = DownloadDB().get_source_statuses().get(source_id, "active")
+    if status != "archived":
+        raise HTTPException(409, detail="Archive this source before deleting it permanently")
+    with _lock:
+        active = next((job for job in _jobs.values() if job.get("status") in {"queued", "running", "stopping"} and source_id in job.get("source_ids", [])), None)
+        if active:
+            raise HTTPException(409, detail="Wait for the source task to stop before deleting it")
+    cfg.sources = [item for item in cfg.sources if item.id != source_id]
+    save_config(cfg)
+    deleted = DownloadDB().delete_source_data(source_id)
+    return {"status": "deleted", "source_id": source_id, "files_removed": False, "records_removed": sum(deleted.values()), "details": deleted}
+
+
 @app.post("/api/jobs")
 def create_job(payload: JobPayload) -> dict[str, str]:
     cfg = _config()
@@ -594,13 +614,26 @@ def clean_folders() -> dict[str, Any]:
             removed.append(item.name)
     return {"removed": removed}
 
-def _read_excel_sources(path: str) -> tuple[AppConfig, list[SourceConfig], list[str]]:
+def _read_excel_sources(path: str, root_path: str = "") -> tuple[AppConfig, list[SourceConfig], list[str]]:
     import openpyxl
-    cfg = _config(); root_value = cfg.global_config.source_root_path
-    if not root_value: raise HTTPException(400, detail="Set Root path first")
-    root = Path(root_value)
-    wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
-    ws = wb.active; rows = list(ws.iter_rows(values_only=True))
+    cfg = _config()
+    workbook_path = Path(path)
+    if not workbook_path.is_file():
+        raise HTTPException(400, detail="Excel file not found")
+    root_value = (root_path or cfg.global_config.source_root_path).strip()
+    if not root_value:
+        raise HTTPException(400, detail="Choose a download root folder for the imported sources")
+    root = Path(root_value).expanduser().resolve()
+    if not root.is_dir():
+        raise HTTPException(400, detail="Download root folder not found. Choose another folder and retry")
+    cfg.global_config.source_root_path = str(root)
+    try:
+        wb = openpyxl.load_workbook(workbook_path, read_only=True, data_only=True)
+        ws = wb.active
+        rows = list(ws.iter_rows(values_only=True))
+        wb.close()
+    except Exception as error:
+        raise HTTPException(400, detail=f"Could not read Excel file: {error}") from error
     if not rows: return cfg, [], []
     headers = [str(x or '').strip().lower() for x in rows[0]]
     def col(name: str) -> int | None:
@@ -610,31 +643,42 @@ def _read_excel_sources(path: str) -> tuple[AppConfig, list[SourceConfig], list[
     link_cols = [i for i, h in enumerate(headers) if h.startswith('link')]
     note_i, reup_i = col('note'), col('nguồn reup')
     incoming: list[SourceConfig] = []; errors: list[str] = []
-    for row in rows[1:]:
+    for row_number, row in enumerate(rows[1:], start=2):
+        if not any(value is not None and str(value).strip() for value in row):
+            continue
         folder = str(row[folder_i] or '').strip()
         links = [str(row[i]).strip() for i in link_cols if i < len(row) and row[i]]
-        source = SourceConfig(id='', path_download=str(root / folder), links=links,
+        folder_path = Path(folder)
+        if not folder or folder_path.is_absolute() or folder in {'.', '..'} or '..' in folder_path.parts:
+            errors.append(f"Row {row_number}: invalid folder name '{folder or '(blank)'}'")
+            continue
+        destination = (root / folder_path).resolve()
+        if not destination.is_relative_to(root):
+            errors.append(f"Row {row_number}: folder must stay inside the selected root")
+            continue
+        source = SourceConfig(id='', path_download=str(destination), links=links,
             note=str(row[note_i] or '').strip() if note_i is not None and note_i < len(row) else '',
             reup_source=str(row[reup_i] or '').strip() if reup_i is not None and reup_i < len(row) else '')
         row_errors = validate_source(source)
-        if row_errors: errors.extend(f"{folder or 'Unnamed row'}: {error}" for error in row_errors)
+        if row_errors: errors.extend(f"Row {row_number} ({folder}): {error}" for error in row_errors)
         else: incoming.append(source)
     return cfg, incoming, errors
 
 
 @app.post("/api/excel/preview")
 def preview_excel(payload: FilePayload) -> dict[str, Any]:
-    cfg, incoming, errors = _read_excel_sources(payload.path)
+    cfg, incoming, errors = _read_excel_sources(payload.path, payload.root_path)
     duplicates = []
     for source in incoming:
         duplicates.extend(_duplicate_links(cfg, source.links))
     return {"rows": len(incoming), "errors": errors, "duplicates": duplicates,
+            "root_path": cfg.global_config.source_root_path,
             "preview": [{"folder": source.path_download, "note": source.note, "links": len(source.links)} for source in incoming[:50]]}
 
 
 @app.post("/api/excel/import")
 def import_excel(payload: FilePayload) -> dict[str, Any]:
-    cfg, incoming, errors = _read_excel_sources(payload.path)
+    cfg, incoming, errors = _read_excel_sources(payload.path, payload.root_path)
     if errors:
         raise HTTPException(400, detail=errors)
     old = {str(Path(s.path_download).resolve()).lower(): s for s in cfg.sources}

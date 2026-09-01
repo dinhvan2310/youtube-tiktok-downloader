@@ -33,6 +33,7 @@ def _resolve_tool(tool_name: str) -> str | None:
             root / tool_name / f"{tool_name}.exe",
             root / tool_name / "bin" / f"{tool_name}.exe",
             root / "tools" / tool_name / "bin" / f"{tool_name}.exe",
+            root / "tools" / "ffmpeg" / "bin" / f"{tool_name}.exe",
         ]
     )
     if getattr(sys, "frozen", False):
@@ -42,6 +43,7 @@ def _resolve_tool(tool_name: str) -> str | None:
                 meipass / f"{tool_name}.exe",
                 meipass / tool_name / f"{tool_name}.exe",
                 meipass / tool_name / "bin" / f"{tool_name}.exe",
+                meipass / "tools" / "ffmpeg" / "bin" / f"{tool_name}.exe",
             ]
         )
     which = shutil.which(tool_name)

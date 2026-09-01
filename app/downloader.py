@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import json
 import re
 import shutil
+import subprocess
 import time
 import threading
 from contextlib import contextmanager
@@ -13,7 +15,7 @@ import yt_dlp
 from app.config_models import GlobalConfig
 from app.db import DownloadDB
 from app.filename import sanitize_title, unique_filepath
-from app.paths import resolve_ffmpeg
+from app.paths import resolve_ffmpeg, resolve_ffprobe
 from app.playlist import VideoEntry
 from app.ytdlp_cookies import apply_tiktok_cookies, apply_youtube_cookies, cookie_file_fallback_options, is_browser_cookie_locked
 
@@ -37,37 +39,36 @@ def _download_slot(limit: int):
 
 
 def _format_selector(quality: int, platform: str = "") -> str:
-    if int(quality) <= 0:
-        if platform == "tiktok":
-            return "best[vcodec^=avc1]/best[vcodec^=h264]/download/best"
-        return "bv*+ba/b" if platform == "youtube" else "bestvideo+bestaudio/best"
+    limit = max(0, int(quality))
     if platform == "tiktok":
         # bytevc1/h265 often advertises AAC but the file is video-only (silent).
-        # Prefer H264 / download; never let bare "best" win first (picks silent HEVC).
-        return (
-            f"best[vcodec^=avc1][height<={quality}]/"
-            f"best[vcodec^=h264][height<={quality}]/"
-            f"best[vcodec^=avc1]/"
-            f"best[vcodec^=h264]/"
-            f"download/best"
-        )
+        # Resolution is constrained separately via format_sort so portrait videos
+        # are evaluated by their short edge instead of raw height.
+        if limit:
+            return (
+                f"best[vcodec^=avc1][height<={limit}]/"
+                f"best[vcodec^=h264][height<={limit}]/"
+                f"best[vcodec^=avc1][width<={limit}]/"
+                f"best[vcodec^=h264][width<={limit}]/"
+                f"download[height<={limit}]/download[width<={limit}]"
+            )
+        return "best[vcodec^=avc1]/best[vcodec^=h264]/download/best"
     if platform == "youtube":
-        # Prefer YouTube quality label (1080p/720p/...), not raw pixel height.
-        # Shorts "1080p" is often 1080x1440 — height<=1080 alone picks 720p wrongly.
-        q = int(quality)
-        label = f"{q}p"
+        if limit:
+            # The two strict branches support both landscape (height) and
+            # portrait (width) videos without an uncapped fallback.
+            return (
+                f"bv[height<={limit}]+ba/bv[width<={limit}]+ba/"
+                f"b[height<={limit}]/b[width<={limit}]"
+            )
+        return "bv*+ba/b"
+    if limit:
         return (
-            f"bv*[format_note*={label}]+ba/"
-            f"b[format_note*={label}]/"
-            f"bv*[height={q}]+ba/"
-            f"bv*[width={q}]+ba/"
-            f"bv*[height<={q}]+ba/"
-            f"bv*[width<={q}]+ba/"
-            f"b[height={q}]/b[width={q}]/"
-            f"b[height<={q}]/b[width<={q}]/"
-            f"bv*+ba/b"
+            f"bestvideo[height<={limit}]+bestaudio/"
+            f"bestvideo[width<={limit}]+bestaudio/"
+            f"best[height<={limit}]/best[width<={limit}]"
         )
-    return f"bestvideo[height<={quality}]+bestaudio/best[height<={quality}]/best"
+    return "bestvideo+bestaudio/best"
 
 
 class VideoDownloader:
@@ -102,6 +103,7 @@ class VideoDownloader:
         tmp_outtmpl = str(page_dir / f"__tmp_{entry.video_id}.%(ext)s")
 
         progress_state = {"last_download_line": ""}
+        quality_limit = max(0, int(self.global_cfg.quality_height))
         self._progress_event({"stage": "starting", "source_id": source_id, "video_id": entry.video_id, "title": entry.title})
         opts = {
             "format": _format_selector(self.global_cfg.quality_height, entry.platform),
@@ -123,23 +125,36 @@ class VideoDownloader:
             "progress_hooks": [self._make_progress_hook(source_id, entry, progress_state)],
         }
         if entry.platform == "tiktok":
-            # Prefer H264 over silent bytevc1/h265 when sorting ties.
-            opts["format_sort"] = ["vcodec:h264", "res", "br"]
+            # Prefer the best short-edge resolution within the configured cap,
+            # then H264 over silent bytevc1/h265 when sorting ties.
+            opts["format_sort"] = ([f"res:{quality_limit}"] if quality_limit else ["res"]) + ["vcodec:h264", "br"]
             apply_tiktok_cookies(opts, cookies_file=self.global_cfg.tiktok_cookies_file)
         elif entry.platform == "youtube":
+            if quality_limit:
+                opts["format_sort"] = [f"res:{quality_limit}"]
             apply_youtube_cookies(
                 opts,
                 cookies_file=self.global_cfg.youtube_cookies_file,
                 cookies_browser=self.global_cfg.youtube_cookies_browser,
             )
         ffmpeg = resolve_ffmpeg()
+        ffprobe = resolve_ffprobe()
         if ffmpeg:
             opts["ffmpeg_location"] = str(Path(ffmpeg).parent)
-        else:
-            # Without FFmpeg yt-dlp cannot merge separate video/audio streams.
-            # Prefer a progressive stream so the download still completes.
-            opts["format"] = "b/best"
-            self._log("FFmpeg not found; using a progressive YouTube format")
+        elif entry.platform == "youtube":
+            return self._fail_before_download(
+                source_id,
+                entry,
+                page_dir,
+                "FFmpeg is required for best-quality YouTube downloads. Reinstall or rebuild the app to restore its media tools.",
+            )
+        if quality_limit and not ffprobe:
+            return self._fail_before_download(
+                source_id,
+                entry,
+                page_dir,
+                "FFprobe is required to verify the configured resolution limit. Reinstall or rebuild the app to restore its media tools.",
+            )
 
         try:
             try:
@@ -169,6 +184,23 @@ class VideoDownloader:
                 self._log(f"File not found after download: {entry.title}")
                 return False
 
+            media_width, media_height = self._probe_resolution(tmp_path, ffprobe)
+            media_resolution = min(media_width, media_height) if media_width and media_height else None
+            if quality_limit and media_resolution is None:
+                return self._fail_before_download(
+                    source_id,
+                    entry,
+                    page_dir,
+                    "Downloaded file could not be verified, so it was removed instead of bypassing the resolution setting.",
+                )
+            if quality_limit and media_resolution > quality_limit:
+                return self._fail_before_download(
+                    source_id,
+                    entry,
+                    page_dir,
+                    f"Downloaded resolution {media_width}x{media_height} exceeds the {quality_limit}p limit; the file was removed.",
+                )
+
             target = unique_filepath(page_dir, final_name, tmp_path.suffix)
             if tmp_path != target:
                 tmp_path.rename(target)
@@ -187,8 +219,13 @@ class VideoDownloader:
                 self._log(f"DB duplicate, removed file: {entry.title}")
                 return False
 
-            self._log(f"Downloaded: {downloaded_path.name}")
-            self._progress_event({"stage": "completed", "source_id": source_id, "video_id": entry.video_id, "title": entry.title})
+            resolution_detail = f" ({media_width}x{media_height})" if media_width and media_height else ""
+            self._log(f"Downloaded: {downloaded_path.name}{resolution_detail}")
+            self._progress_event({
+                "stage": "completed", "source_id": source_id, "video_id": entry.video_id,
+                "title": entry.title, "width": media_width, "height": media_height,
+                "resolution": media_resolution, "quality_limit": quality_limit,
+            })
             return True
 
         except Exception as e:
@@ -209,6 +246,45 @@ class VideoDownloader:
                 self._log(f"Dropped from queue (gone): {entry.title}")
             self._log(f"Download error {entry.title}: {e}")
             return False
+
+    def _fail_before_download(
+        self, source_id: str, entry: VideoEntry, page_dir: Path, message: str
+    ) -> bool:
+        self._cleanup_entry_files(page_dir, entry.video_id)
+        self._progress_log(f"ERROR: {message}")
+        self._progress_event({
+            "stage": "failed", "source_id": source_id, "video_id": entry.video_id,
+            "title": entry.title, "error": message,
+        })
+        self._log(f"Download error {entry.title}: {message}")
+        return False
+
+    def _probe_resolution(self, path: Path, ffprobe: str | None) -> tuple[int | None, int | None]:
+        if not ffprobe:
+            return None, None
+        try:
+            result = subprocess.run(
+                [
+                    ffprobe, "-v", "error", "-select_streams", "v:0",
+                    "-show_entries", "stream=width,height", "-of", "json", str(path),
+                ],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=30,
+                check=True,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+            streams = json.loads(result.stdout).get("streams") or []
+            if not streams:
+                return None, None
+            width = int(streams[0].get("width") or 0) or None
+            height = int(streams[0].get("height") or 0) or None
+            return width, height
+        except (OSError, ValueError, subprocess.SubprocessError, json.JSONDecodeError) as error:
+            self._log(f"Could not inspect downloaded resolution: {error}")
+            return None, None
 
     @staticmethod
     def _is_youtube_bot_check(message: str) -> bool:

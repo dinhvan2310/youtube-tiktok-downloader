@@ -27,6 +27,7 @@ export const validateSource = payload => api('/sources/validate', { method: 'POS
 export const createSource = payload => api('/sources', { method: 'POST', body: JSON.stringify(payload) })
 export const updateSource = (id, payload) => api(`/sources/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(payload) })
 export const setSourceArchived = (id, archived) => api(`/sources/${encodeURIComponent(id)}/${archived ? 'archive' : 'restore'}`, { method: 'POST' })
+export const deleteSource = id => api(`/sources/${encodeURIComponent(id)}`, { method: 'DELETE' })
 export const getVideos = (filters = {}) => {
   const params = new URLSearchParams()
   const aliases = { sourceId: 'source_id', excludeKeyword: 'exclude_keyword', minDuration: 'min_duration', maxDuration: 'max_duration', minViews: 'min_views', publishedAfter: 'published_after', publishedBefore: 'published_before', metadataStatus: 'metadata_status', contentType: 'content_type' }

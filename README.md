@@ -37,14 +37,11 @@ The app starts with an empty source list, so you can configure your own workspac
 
 ## Installation
 
-1. Install FFmpeg and ffprobe on your Windows computer.
-2. Download and run [Tool-Download-Video-Setup-1.0.0.exe](https://github.com/dinhvan2310/youtube-tiktok-downloader/releases/download/v1.0.0/Tool-Download-Video-Setup-1.0.0.exe).
-3. Follow the installer steps.
-4. Open Tool Download Video from the Desktop or Start Menu.
+1. Download and run [Tool-Download-Video-Setup-1.0.1.exe](https://github.com/dinhvan2310/youtube-tiktok-downloader/releases/download/v1.0.1/Tool-Download-Video-Setup-1.0.1.exe).
+2. Follow the installer steps.
+3. Open Tool Download Video from the Desktop or Start Menu.
 
-Python is not required. The application includes its own backend.
-
-FFmpeg and ffprobe are required to process and merge separate video and audio streams. Make sure both commands are available on your system `PATH`.
+Python, FFmpeg, and ffprobe do not need to be installed separately. The application bundles its backend and media tools.
 
 The installer is currently unsigned, so Windows SmartScreen may display a warning. Only run the installer if it came from a trusted source.
 
@@ -55,7 +52,6 @@ Requirements:
 - Windows
 - Python 3.11 or newer
 - Node.js 18 or newer
-- FFmpeg and ffprobe available on `PATH`
 
 From the project root, create the Python environment and install the backend dependencies:
 
@@ -73,8 +69,10 @@ npm install
 npm run dist:installer
 ```
 
+The build downloads the Windows FFmpeg archive, verifies its SHA-256 checksum, and bundles `ffmpeg.exe` and `ffprobe.exe` into the backend automatically.
+
 The installer is created at:
 
-`electron/dist/Tool-Download-Video-Setup-1.0.0.exe`
+`electron/dist/Tool-Download-Video-Setup-1.0.1.exe`
 
 The build includes the Electron interface and the bundled Python backend. The installer can be shared with end users after a successful build.

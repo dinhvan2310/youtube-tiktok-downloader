@@ -12,5 +12,6 @@ logs/
 *.egg-info/
 dist/
 build/
+tools/ffmpeg/bin/
 renderer-dist/
 backend-dist/

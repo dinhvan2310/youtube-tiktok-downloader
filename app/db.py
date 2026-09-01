@@ -520,6 +520,23 @@ class DownloadDB:
                 (self._sid(source_id), status, archived_at, _now()),
             )
 
+    def delete_source_data(self, source_id: int | str) -> dict[str, int]:
+        """Remove app-owned records for a source without touching downloaded files."""
+        sid = self._sid(source_id)
+        deleted: dict[str, int] = {}
+        with self._connect() as conn:
+            for key, table, column in (
+                ("downloads", "downloaded_videos", "page_id"),
+                ("videos", "crawled_videos", "source_id"),
+                ("approvals", "approval_events", "source_id"),
+                ("checkpoint", "crawl_checkpoints", "source_id"),
+                ("stats", "source_stats", "source_id"),
+                ("lifecycle", "source_lifecycle", "source_id"),
+            ):
+                cursor = conn.execute(f"DELETE FROM {table} WHERE {column} = ?", (sid,))
+                deleted[key] = int(cursor.rowcount)
+        return deleted
+
     def create_job_record(self, job_id: str, kind: str, source_ids: list[str], status: str = "queued") -> None:
         with self._connect() as conn:
             conn.execute(
