@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import * as Checkbox from '@radix-ui/react-checkbox'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Archive, ArchiveRestore, FolderOpen, MoreHorizontal, Pencil, Plus, RefreshCw, Search, Trash2, Upload } from 'lucide-react'
+import { Archive, ArchiveRestore, Check, FolderOpen, MoreHorizontal, Pencil, Plus, RefreshCw, Search, Trash2, Upload } from 'lucide-react'
 import { toast } from 'sonner'
 import { createJob, deleteSource, getSources, setSourceArchived } from './api'
 import { DeleteSourceDialog } from './DeleteSourceDialog'
@@ -29,6 +30,7 @@ export function SourcesPage({ startJob }) {
   const [bulkPending, setBulkPending] = useState(false)
   const selectAllRef = useRef(null)
   const lastSelectedIdRef = useRef(null)
+  const selectionModifierRef = useRef({ shiftKey: false })
   const { data: sources = [], isPending, error } = useQuery({ queryKey: ['sources', true], queryFn: () => getSources(true) })
   const rows = useMemo(() => sources.filter(source => {
     const matches = JSON.stringify(source).toLowerCase().includes(query.toLowerCase())
@@ -52,10 +54,10 @@ export function SourcesPage({ startJob }) {
     setSelectedIds(current => new Set([...current].filter(id => knownIds.has(id))))
   }, [sources])
 
-  const toggleSelected = (id, event) => {
+  const toggleSelected = (id, { shiftKey = false } = {}) => {
     const key = String(id)
     const anchorId = lastSelectedIdRef.current
-    const rangeStart = event?.shiftKey && anchorId ? visibleIds.indexOf(anchorId) : -1
+    const rangeStart = shiftKey && anchorId ? visibleIds.indexOf(anchorId) : -1
     const rangeEnd = visibleIds.indexOf(key)
     lastSelectedIdRef.current = key
     setSelectedIds(current => {
@@ -77,6 +79,9 @@ export function SourcesPage({ startJob }) {
   const clearSelection = () => {
     lastSelectedIdRef.current = null
     setSelectedIds(new Set())
+  }
+  const recordSelectionModifier = event => {
+    selectionModifierRef.current = { shiftKey: Boolean(event.shiftKey) }
   }
   const removeReviewItemsForSources = ids => {
     const removedIds = new Set(ids.map(String))
@@ -144,7 +149,7 @@ export function SourcesPage({ startJob }) {
       {isPending && <tr><td colSpan="9"><div className="table-state">Loading sources…</div></td></tr>}
       {error && <tr><td colSpan="9"><div className="table-state error">{error.message}</div></td></tr>}
       {!isPending && rows.map(source => <tr key={source.id} className={selectedIds.has(String(source.id)) ? 'selected' : undefined}>
-        <td className="source-select-cell"><input className="source-checkbox" type="checkbox" checked={selectedIds.has(String(source.id))} onChange={event => toggleSelected(source.id, event)} aria-label={`Select ${sourceName(source)}`} /></td>
+        <td className="source-select-cell"><Checkbox.Root className="source-checkbox" checked={selectedIds.has(String(source.id))} onPointerDown={recordSelectionModifier} onClick={recordSelectionModifier} onKeyDown={recordSelectionModifier} onCheckedChange={() => toggleSelected(source.id, selectionModifierRef.current)} aria-label={`Select ${sourceName(source)}`}><Checkbox.Indicator><Check size={13} /></Checkbox.Indicator></Checkbox.Root></td>
         <td><div className="source"><div><strong>{sourceName(source)}</strong><small>{source.status === 'archived' ? 'Archived' : source.stale ? 'Needs sync' : 'Active'}</small></div></div></td>
         <td className="source-path-cell"><button className="source-path-button" title={source.path_download} onClick={() => window.desktop?.openPath(source.path_download)}><FolderOpen size={14} aria-hidden="true" /><span>{source.path_download}</span></button></td>
         <td className="number">{source.links?.length || 0}</td><td className="number">{source.review_count || 0}</td><td className="number">{source.queued_count || 0}</td>
