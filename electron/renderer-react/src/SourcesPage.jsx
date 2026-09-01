@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Archive, ArchiveRestore, FolderOpen, MoreHorizontal, Pencil, Plus, RefreshCw, Search, Trash2, Upload } from 'lucide-react'
 import { toast } from 'sonner'
@@ -25,6 +25,9 @@ export function SourcesPage({ startJob }) {
   const [dialog, setDialog] = useState({ open: false, source: null })
   const [deleteDialog, setDeleteDialog] = useState({ open: false, source: null })
   const [importOpen, setImportOpen] = useState(false)
+  const [selectedIds, setSelectedIds] = useState(() => new Set())
+  const [bulkPending, setBulkPending] = useState(false)
+  const selectAllRef = useRef(null)
   const { data: sources = [], isPending, error } = useQuery({ queryKey: ['sources', true], queryFn: () => getSources(true) })
   const rows = useMemo(() => sources.filter(source => {
     const matches = JSON.stringify(source).toLowerCase().includes(query.toLowerCase())
@@ -34,6 +37,50 @@ export function SourcesPage({ startJob }) {
     if (filter === 'sync') return source.status !== 'archived' && source.stale
     return source.status !== 'archived'
   }), [sources, query, filter])
+  const visibleIds = useMemo(() => rows.map(source => String(source.id)), [rows])
+  const selectedVisibleCount = visibleIds.filter(id => selectedIds.has(id)).length
+  const allVisibleSelected = visibleIds.length > 0 && selectedVisibleCount === visibleIds.length
+  const someVisibleSelected = selectedVisibleCount > 0 && !allVisibleSelected
+
+  useEffect(() => {
+    if (selectAllRef.current) selectAllRef.current.indeterminate = someVisibleSelected
+  }, [someVisibleSelected])
+
+  useEffect(() => {
+    const knownIds = new Set(sources.map(source => String(source.id)))
+    setSelectedIds(current => new Set([...current].filter(id => knownIds.has(id))))
+  }, [sources])
+
+  const toggleSelected = id => setSelectedIds(current => {
+    const next = new Set(current)
+    const key = String(id)
+    if (next.has(key)) next.delete(key)
+    else next.add(key)
+    return next
+  })
+  const toggleAllVisible = () => setSelectedIds(current => {
+    const next = new Set(current)
+    if (allVisibleSelected) visibleIds.forEach(id => next.delete(id))
+    else visibleIds.forEach(id => next.add(id))
+    return next
+  })
+  const clearSelection = () => setSelectedIds(new Set())
+  const archiveSelected = async () => {
+    const targets = sources.filter(source => selectedIds.has(String(source.id)) && source.status !== 'archived')
+    if (!targets.length) return
+    if (!confirm(`Archive ${targets.length} selected source${targets.length === 1 ? '' : 's'}? Folder and history stay intact.`)) return
+    setBulkPending(true)
+    try {
+      for (const source of targets) await setSourceArchived(source.id, true)
+      clearSelection()
+      await queryClient.invalidateQueries()
+      toast.success(`${targets.length} source${targets.length === 1 ? '' : 's'} archived`)
+    } catch (bulkError) {
+      toast.error(bulkError.message)
+    } finally {
+      setBulkPending(false)
+    }
+  }
   const lifecycle = useMutation({
     mutationFn: ({ id, archived }) => setSourceArchived(id, archived),
     onSuccess: (_, variables) => {
@@ -55,20 +102,24 @@ export function SourcesPage({ startJob }) {
   return <section className="page sources-page">
     <header className="page-header"><div><p className="eyebrow">1 / SOURCES</p><h1>Sources</h1><p>Channel ownership, health and background sync in one place.</p></div><button className="button button-primary" onClick={() => setDialog({ open: true, source: null })}><Plus size={17} /> Add source</button></header>
     <div className="toolbar"><label className="search"><Search size={17} /><input value={query} onChange={event => setQuery(event.target.value)} placeholder="Search sources, paths or links" /></label><SelectField value={filter} onValueChange={setFilter} ariaLabel="Filter sources" options={[{ value: 'active', label: 'Active' }, { value: 'review', label: 'Needs review' }, { value: 'sync', label: 'Needs sync' }, { value: 'archived', label: 'Archived' }]} /><div className="toolbar-spacer" /><button className="button button-ghost" onClick={() => setImportOpen(true)}><Upload size={16} /> Import</button><button className="icon-button" aria-label="Refresh sources" onClick={() => queryClient.invalidateQueries()}><RefreshCw size={17} /></button></div>
-    <div className="table-card sources-table"><table><thead><tr><th>Source</th><th>Path</th><th>Links</th><th>Review</th><th>Queued</th><th>Capacity</th><th>Last sync</th><th>Actions</th></tr></thead><tbody>
-      {isPending && <tr><td colSpan="8"><div className="table-state">Loading sources…</div></td></tr>}
-      {error && <tr><td colSpan="8"><div className="table-state error">{error.message}</div></td></tr>}
-      {!isPending && rows.map(source => <tr key={source.id}>
+    {selectedIds.size > 0 && <div className="selection-bar" role="status" aria-live="polite"><strong>{selectedIds.size} selected</strong><span>{selectedVisibleCount} in this view</span>{targetsForArchive(sources, selectedIds).length > 0 && <button className="bulk-action primary" disabled={bulkPending} onClick={archiveSelected}>{bulkPending ? 'Archiving…' : 'Archive selected'}</button>}<button onClick={clearSelection}>Clear selection</button></div>}
+    <div className="table-card sources-table"><table><thead><tr><th className="source-select-cell"><input ref={selectAllRef} className="source-checkbox" type="checkbox" checked={allVisibleSelected} onChange={toggleAllVisible} disabled={!visibleIds.length || isPending} aria-label="Select all visible sources" /></th><th>Source</th><th>Path</th><th>Links</th><th>Review</th><th>Queued</th><th>Capacity</th><th>Last sync</th><th>Actions</th></tr></thead><tbody>
+      {isPending && <tr><td colSpan="9"><div className="table-state">Loading sources…</div></td></tr>}
+      {error && <tr><td colSpan="9"><div className="table-state error">{error.message}</div></td></tr>}
+      {!isPending && rows.map(source => <tr key={source.id} className={selectedIds.has(String(source.id)) ? 'selected' : undefined}>
+        <td className="source-select-cell"><input className="source-checkbox" type="checkbox" checked={selectedIds.has(String(source.id))} onChange={() => toggleSelected(source.id)} aria-label={`Select ${sourceName(source)}`} /></td>
         <td><div className="source"><div><strong>{sourceName(source)}</strong><small>{source.status === 'archived' ? 'Archived' : source.stale ? 'Needs sync' : 'Active'}</small></div></div></td>
         <td className="source-path-cell"><button className="source-path-button" title={source.path_download} onClick={() => window.desktop?.openPath(source.path_download)}><FolderOpen size={14} aria-hidden="true" /><span>{source.path_download}</span></button></td>
         <td className="number">{source.links?.length || 0}</td><td className="number">{source.review_count || 0}</td><td className="number">{source.queued_count || 0}</td>
         <td><strong>{source.folder_count || 0}/{(source.folder_count || 0) + (source.capacity || 0)}</strong><small>{source.capacity || 0} slots</small></td><td>{relative(source.last_crawl_at)}</td>
         <td><div className="row-actions">{source.status === 'archived' ? <><button className="row-action" onClick={() => lifecycle.mutate({ id: source.id, archived: false })}><ArchiveRestore size={15} /> Restore</button><button className="icon-button danger" aria-label={`Delete ${sourceName(source)} permanently`} onClick={() => setDeleteDialog({ open: true, source })}><Trash2 size={16} /></button></> : <><button className="row-action" onClick={() => syncSource(source.id)}><RefreshCw size={15} /> Sync</button><button className="icon-button" aria-label={`Edit ${sourceName(source)}`} onClick={() => setDialog({ open: true, source })}><Pencil size={16} /></button><button className="icon-button danger" aria-label={`Archive ${sourceName(source)}`} onClick={() => { if (confirm(`Archive “${sourceName(source)}”? Folder and history stay intact.`)) lifecycle.mutate({ id: source.id, archived: true }) }}><Archive size={16} /></button></>}</div></td>
       </tr>)}
-      {!isPending && rows.length === 0 && <tr><td colSpan="8"><div className="table-state"><MoreHorizontal size={18} /> No sources match this view.</div></td></tr>}
+      {!isPending && rows.length === 0 && <tr><td colSpan="9"><div className="table-state"><MoreHorizontal size={18} /> No sources match this view.</div></td></tr>}
     </tbody></table></div>
     <SourceDialog source={dialog.source} open={dialog.open} onOpenChange={open => setDialog(current => ({ ...current, open }))} onSync={syncSource} />
     <ImportSourcesDialog open={importOpen} onOpenChange={setImportOpen} />
     <DeleteSourceDialog source={deleteDialog.source} open={deleteDialog.open} onOpenChange={open => setDeleteDialog(current => ({ ...current, open }))} />
   </section>
 }
+
+const targetsForArchive = (sources, selectedIds) => sources.filter(source => selectedIds.has(String(source.id)) && source.status !== 'archived')
