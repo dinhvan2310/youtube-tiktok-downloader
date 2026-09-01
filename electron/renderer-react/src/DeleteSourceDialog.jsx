@@ -7,13 +7,14 @@ import { deleteSource } from './api'
 
 const label = source => source?.label || source?.note || source?.path_download?.split(/[\\/]/).pop() || 'Source'
 
-export function DeleteSourceDialog({ source, open, onOpenChange }) {
+export function DeleteSourceDialog({ source, open, onOpenChange, onDeleted }) {
   const queryClient = useQueryClient()
   const [confirmed, setConfirmed] = useState(false)
   useEffect(() => { if (!open) setConfirmed(false) }, [open])
   const remove = useMutation({
     mutationFn: () => deleteSource(source.id),
     onSuccess: result => {
+      onDeleted?.(source.id)
       queryClient.invalidateQueries()
       toast.success(`Deleted ${label(source)} · downloaded files were kept`)
       onOpenChange(false)

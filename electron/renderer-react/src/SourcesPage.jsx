@@ -52,26 +52,39 @@ export function SourcesPage({ startJob }) {
     setSelectedIds(current => new Set([...current].filter(id => knownIds.has(id))))
   }, [sources])
 
-  const toggleSelected = (id, event) => setSelectedIds(current => {
-    const next = new Set(current)
+  const toggleSelected = (id, event) => {
     const key = String(id)
-    const rangeStart = event?.shiftKey && lastSelectedIdRef.current ? visibleIds.indexOf(lastSelectedIdRef.current) : -1
+    const anchorId = lastSelectedIdRef.current
+    const rangeStart = event?.shiftKey && anchorId ? visibleIds.indexOf(anchorId) : -1
     const rangeEnd = visibleIds.indexOf(key)
-    if (rangeStart >= 0 && rangeEnd >= 0) {
-      const [from, to] = [rangeStart, rangeEnd].sort((a, b) => a - b)
-      visibleIds.slice(from, to + 1).forEach(visibleId => next.add(visibleId))
-    } else if (next.has(key)) next.delete(key)
-    else next.add(key)
     lastSelectedIdRef.current = key
-    return next
-  })
+    setSelectedIds(current => {
+      const next = new Set(current)
+      if (rangeStart >= 0 && rangeEnd >= 0) {
+        const [from, to] = [rangeStart, rangeEnd].sort((a, b) => a - b)
+        visibleIds.slice(from, to + 1).forEach(visibleId => next.add(visibleId))
+      } else if (next.has(key)) next.delete(key)
+      else next.add(key)
+      return next
+    })
+  }
   const toggleAllVisible = () => setSelectedIds(current => {
     const next = new Set(current)
     if (allVisibleSelected) visibleIds.forEach(id => next.delete(id))
     else visibleIds.forEach(id => next.add(id))
     return next
   })
-  const clearSelection = () => setSelectedIds(new Set())
+  const clearSelection = () => {
+    lastSelectedIdRef.current = null
+    setSelectedIds(new Set())
+  }
+  const removeReviewItemsForSources = ids => {
+    const removedIds = new Set(ids.map(String))
+    queryClient.setQueriesData({ queryKey: ['videos'] }, current => {
+      if (!current?.items) return current
+      return { ...current, items: current.items.filter(item => !removedIds.has(String(item.source_id))) }
+    })
+  }
   const archiveSelected = async () => {
     const targets = sources.filter(source => selectedIds.has(String(source.id)) && source.status !== 'archived')
     if (!targets.length) return
@@ -95,6 +108,7 @@ export function SourcesPage({ startJob }) {
     setBulkPending(true)
     try {
       for (const source of targets) await deleteSource(source.id)
+      removeReviewItemsForSources(targets.map(source => source.id))
       clearSelection()
       await queryClient.invalidateQueries()
       toast.success(`${targets.length} archived source${targets.length === 1 ? '' : 's'} deleted`)
@@ -141,7 +155,7 @@ export function SourcesPage({ startJob }) {
     </tbody></table></div>
     <SourceDialog source={dialog.source} open={dialog.open} onOpenChange={open => setDialog(current => ({ ...current, open }))} onSync={syncSource} />
     <ImportSourcesDialog open={importOpen} onOpenChange={setImportOpen} />
-    <DeleteSourceDialog source={deleteDialog.source} open={deleteDialog.open} onOpenChange={open => setDeleteDialog(current => ({ ...current, open }))} />
+    <DeleteSourceDialog source={deleteDialog.source} open={deleteDialog.open} onDeleted={sourceId => removeReviewItemsForSources([sourceId])} onOpenChange={open => setDeleteDialog(current => ({ ...current, open }))} />
   </section>
 }
 
